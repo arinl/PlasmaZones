@@ -59,6 +59,18 @@ uniform float uSurfaceFocused;      // 1.0 when the surface is focused/active, e
 uniform vec4 customParams[8];
 uniform vec4 customColors[16];
 
+// Multipass buffer-pass outputs. A multipass surface pack (one that declares
+// `bufferShaderPaths` in metadata.json) runs each buffer pass into an FBO; the
+// pass output is bound here as iChannelN for downstream passes and for the main
+// effect, exactly like the overlay/animation categories. Single-pass packs (the
+// border) never reference these — the linker drops them. iChannelResolution[N].xy
+// is the pixel size of iChannelN.
+uniform sampler2D iChannel0;
+uniform sampler2D iChannel1;
+uniform sampler2D iChannel2;
+uniform sampler2D iChannel3;
+uniform vec4 iChannelResolution[4];
+
 #else
 
 // ── Daemon branch — std140 UBO at binding 0 ─────────────────────────────────
@@ -79,9 +91,18 @@ layout(std140, binding = 0) uniform SurfaceUniforms {
     vec4 uSurfaceColor;          // offset 112 (16)
     vec4 customParams[8];        // offset 128 (128)
     vec4 customColors[16];       // offset 256 (256)
-};                               // total 512 bytes
+    vec4 iChannelResolution[4];  // offset 512 (64) — multipass buffer sizes (.xy)
+};                               // total 576 bytes
 
 layout(binding = 7) uniform sampler2D uTexture0;
+
+// Multipass buffer-pass outputs (bindings 2-5, matching the overlay category's
+// shared/multipass.glsl convention so surface and overlay packs speak the same
+// iChannel binding dialect). See the KWin branch above for semantics.
+layout(binding = 2) uniform sampler2D iChannel0;
+layout(binding = 3) uniform sampler2D iChannel1;
+layout(binding = 4) uniform sampler2D iChannel2;
+layout(binding = 5) uniform sampler2D iChannel3;
 
 #endif // PLASMAZONES_KWIN
 

@@ -200,13 +200,62 @@ std::optional<SurfaceShaderEffect> parseEffect(const QString& effectDir, const Q
         tex.path = *validated;
     }
 
+    // Resolve buffer shader paths (relative to effect dir, like
+    // fragment/vertex). Multipass is fail-closed on any missing buffer:
+    // `bufferShaderPaths` is positionally aligned with `bufferWraps`
+    // and `bufferFilters` (per-buffer overrides), and silently
+    // compacting a missing entry would shift downstream wrap/filter
+    // overrides onto the wrong buffer with no surface signal to the
+    // author. Disable multipass entirely instead so the author sees the
+    // full pipeline degrade to single-pass — they will notice and fix
+    // their `metadata.json`. The single-pass fallback is a documented
+    // graceful-degradation contract; silent index corruption is not.
+    if (e.isMultipass) {
+        if (e.bufferShaderPaths.isEmpty()) {
+            // `multipass: true` with no declared buffer shaders is
+            // meaningless — there's nothing to run as a buffer pass.
+            // Normalize to single-pass so downstream consumers and
+            // diagnostics see a coherent state.
+            e.isMultipass = false;
+        } else {
+            QStringList resolved;
+            QStringList missing;
+            for (const QString& bufPath : e.bufferShaderPaths) {
+                const QString abs = dir.filePath(bufPath);
+                if (QFile::exists(abs)) {
+                    resolved.append(abs);
+                } else {
+                    missing.append(abs);
+                }
+            }
+            if (missing.isEmpty()) {
+                e.bufferShaderPaths = resolved;
+            } else {
+                qCWarning(lcRegistry).noquote()
+                    << "Surface effect" << e.id << "is missing" << missing.size() << "of" << e.bufferShaderPaths.size()
+                    << "declared buffer shader(s); disabling multipass and falling back to single-pass. Missing files:"
+                    << missing.join(QLatin1String(", "));
+                e.isMultipass = false;
+                e.bufferShaderPaths.clear();
+                // Per-buffer overrides are positionally aligned with
+                // bufferShaderPaths; with paths cleared, the overrides are
+                // orphaned data that would still survive toJson round-trip
+                // and operator== comparison. Clear them in lockstep so the
+                // disabled-multipass struct is internally coherent.
+                e.bufferWraps.clear();
+                e.bufferFilters.clear();
+            }
+        }
+    }
+
     return e;
 }
 
-/// Per-payload watch list — frag + vert files AND declared user-texture
-/// paths. The strategy already adds the metadata.json itself; this
-/// callback covers everything else. Preview is informational only (no
-/// live-reload need on a static thumbnail) and is excluded.
+/// Per-payload watch list — frag + vert + buffer shader files AND
+/// declared user-texture paths. The strategy already adds the
+/// metadata.json itself; this callback covers everything else. Preview
+/// is informational only (no live-reload need on a static thumbnail)
+/// and is excluded.
 QStringList effectWatchPaths(const SurfaceShaderEffect& e)
 {
     QStringList paths;
@@ -215,6 +264,11 @@ QStringList effectWatchPaths(const SurfaceShaderEffect& e)
     }
     if (!e.vertexShaderPath.isEmpty()) {
         paths.append(e.vertexShaderPath);
+    }
+    for (const QString& bufPath : e.bufferShaderPaths) {
+        if (!bufPath.isEmpty()) {
+            paths.append(bufPath);
+        }
     }
     for (const auto& tex : e.textures) {
         if (!tex.path.isEmpty()) {

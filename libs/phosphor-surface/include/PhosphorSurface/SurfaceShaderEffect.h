@@ -45,14 +45,22 @@ namespace PhosphorSurfaceShaders {
  * Field names mirror `AnimationShaderEffect::ParameterInfo` so surface
  * packs and animation packs can share QML editor components.
  *
+ * ## Multipass buffer passes
+ *
+ * Surface shaders support opt-in multipass: when `isMultipass` is set and
+ * `bufferShaderPaths` is non-empty, the daemon's surface-layer runtime
+ * runs those buffer passes before the main fragment shader. The
+ * kwin-effect compositor path is single-pass only; multipass effects
+ * degrade to single-pass there with a diagnostic log, matching the
+ * overlay / animation packs.
+ *
  * ## Trimmed vs AnimationShaderEffect
  *
- * Surface shaders are single-pass by construction — they composite one
- * layer onto the live surface and never run intermediate buffer passes.
- * This struct therefore OMITS the multipass / buffer / wallpaper / depth
- * / fboExtent / event fields that `AnimationShaderEffect` carries, while
- * keeping the identical identity, shader-path, preview, parameter, and
- * texture-slot shape.
+ * This struct mirrors the multipass / buffer fields that
+ * `AnimationShaderEffect` carries, but still OMITS the wallpaper / depth-
+ * extent-style event and `fboExtent` fields that only make sense for a
+ * finite-duration transition, while keeping the identical identity,
+ * shader-path, preview, parameter, and texture-slot shape.
  */
 struct PHOSPHORSURFACE_EXPORT SurfaceShaderEffect
 {
@@ -91,6 +99,63 @@ struct PHOSPHORSURFACE_EXPORT SurfaceShaderEffect
 
     /// Preview image path (relative to the effect dir). For settings UI.
     QString previewPath;
+
+    // ── Multipass buffer passes (opt-in, matching overlay/animation packs) ──
+
+    /// Opt-in multipass mode. When true and `bufferShaderPaths` is
+    /// non-empty, the daemon path runs those buffer passes before the
+    /// main fragment. The kwin-effect compositor path is single-pass
+    /// only; multipass effects degrade to single-pass there with a
+    /// diagnostic log (see `SurfaceShaderContract.h`).
+    bool isMultipass = false;
+
+    /// Buffer-pass shader paths (relative to effect dir). When non-empty
+    /// and `isMultipass` is true, the daemon's surface-layer runtime runs
+    /// these as intermediate passes before the main fragment shader.
+    QStringList bufferShaderPaths;
+
+    /// Enable per-pass feedback (last frame's buffer is sampleable as
+    /// `iChannel<N>`). Requires `isMultipass`. Daemon-only.
+    bool bufferFeedback = false;
+
+    /// Render-target scale relative to the surface size. Clamped to
+    /// `[0.125, 1.0]` at `fromJson` time. Daemon-only — the compositor
+    /// path doesn't allocate auxiliary FBOs.
+    qreal bufferScale = 1.0;
+
+    /// Default wrap mode for all buffer samplers. Sibling of
+    /// `bufferWraps` (per-buffer overrides). Empty = runtime default.
+    /// Daemon-only.
+    QString bufferWrap;
+
+    /// Per-buffer wrap-mode overrides; index aligns with
+    /// `bufferShaderPaths`. Daemon-only.
+    QStringList bufferWraps;
+
+    /// Default filter mode for all buffer samplers. Empty = runtime
+    /// default. Daemon-only.
+    QString bufferFilter;
+
+    /// Per-buffer filter-mode overrides; index aligns with
+    /// `bufferShaderPaths`. Daemon-only.
+    QStringList bufferFilters;
+
+    /// Allocate a depth buffer alongside the colour FBO so the shader
+    /// can sample window depth. Daemon-only.
+    bool useDepthBuffer = false;
+
+    /// Lower / upper bounds on `bufferScale` (multipass FBO downscale
+    /// factor). 0.125 means a 1/8 downscale on each axis (1/64 area —
+    /// the lowest cost-floor that still gives Shadertoy-style buffer
+    /// effects something to work with). 1.0 means full-resolution
+    /// FBOs (no downscale). Hosted here as the source-of-truth that
+    /// `fromJson`'s clamp + the round-trip stability comment in
+    /// `toJson` reference; a future runtime that consumes bufferScale
+    /// from a non-JSON source can read these constants directly.
+    static constexpr qreal kMinBufferScale = 0.125;
+    static constexpr qreal kMaxBufferScale = 1.0;
+    static_assert(kMinBufferScale > 0.0 && kMinBufferScale < kMaxBufferScale,
+                  "kMinBufferScale must be positive and strictly less than kMaxBufferScale");
 
     /// Declared shader inputs beyond the standard surface set
     /// (uTexture0, uSurfaceSize, uSurfaceColor, etc.). Each entry maps

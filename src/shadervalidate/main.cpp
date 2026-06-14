@@ -509,6 +509,13 @@ int validateSurfacePack(const QString& packDir, QTextStream& out)
     if (!eff.fragmentShaderPath.isEmpty()) {
         eff.fragmentShaderPath = QDir(packDir).filePath(eff.fragmentShaderPath);
     }
+    // fromJson leaves buffer paths relative (the registry's parseEffect resolves
+    // them); resolve here against the pack dir, same as fragmentShaderPath.
+    for (QString& b : eff.bufferShaderPaths) {
+        if (!b.isEmpty()) {
+            b = QDir(packDir).filePath(b);
+        }
+    }
     if (!eff.isValid()) {
         out << name << "\n  metadata      ERROR\n    missing required field (id / fragmentShader)\n  → 1 error\n\n";
         return 1;
@@ -516,7 +523,8 @@ int validateSurfacePack(const QString& packDir, QTextStream& out)
     const QString fragLabel = QFileInfo(eff.fragmentShaderPath).fileName();
 
     out << name << "  (" << eff.parameters.size() << " param" << (eff.parameters.size() == 1 ? "" : "s") << ", "
-        << eff.textures.size() << " texture" << (eff.textures.size() == 1 ? "" : "s") << ")\n";
+        << eff.textures.size() << " texture" << (eff.textures.size() == 1 ? "" : "s") << ", "
+        << (eff.isMultipass ? "multipass" : "single-pass") << ")\n";
 
     int errors = 0;
 
@@ -543,6 +551,22 @@ int validateSurfacePack(const QString& packDir, QTextStream& out)
     for (const QJsonValue& v : declaredTextures) {
         if (v.toObject().value(QLatin1String("path")).toString().isEmpty()) {
             lints << QStringLiteral("texture entry with empty `path` (dropped at load)");
+        }
+    }
+    // Multipass buffer lints — read RAW metadata, not the parsed struct: fromJson
+    // clamps bufferScale into [0.125, 1.0] and drops missing buffers, so a lint
+    // over the parsed values would hide author errors.
+    if (eff.isMultipass) {
+        const QJsonArray declaredBuffers = doc.object().value(QLatin1String("bufferShaders")).toArray();
+        for (const QJsonValue& v : declaredBuffers) {
+            const QString bufName = v.toString();
+            if (!bufName.isEmpty() && !QFile::exists(QDir(packDir).filePath(bufName))) {
+                lints << QStringLiteral("multipass buffer shader missing: %1").arg(bufName);
+            }
+        }
+        const double rawScale = doc.object().value(QLatin1String("bufferScale")).toDouble(1.0);
+        if (rawScale < 0.125 || rawScale > 1.0) {
+            lints << QStringLiteral("bufferScale out of range [0.125, 1.0]: %1 (clamped at load)").arg(rawScale);
         }
     }
     if (!QFile::exists(eff.fragmentShaderPath)) {
@@ -579,6 +603,38 @@ int validateSurfacePack(const QString& packDir, QTextStream& out)
                     PhosphorShaders::spliceAfterVersion(expanded, SurfaceShaderRegistry::paramPreamble(eff));
                 const ShaderCompiler::Result result = ShaderCompiler::compile(spliced.toUtf8(), QShader::FragmentStage);
                 errors += reportCompile(out, fragLabel, result, declaredParamNames(eff.parameters));
+            }
+        }
+    }
+
+    // ── multipass buffer passes ──
+    // Buffer passes carry their own main() (no entry scaffold, no param preamble)
+    // and bake on the daemon Qt-RHI path, same as overlay packs. The compositor
+    // runtime executes them via the GL-FBO chain; both share this source.
+    if (eff.isMultipass) {
+        const QStringList includePaths = {QFileInfo(packDir).absolutePath() + QStringLiteral("/shared")};
+        for (const QString& buf : eff.bufferShaderPaths) {
+            if (!QFile::exists(buf)) {
+                continue; // missing buffers already linted above
+            }
+            const QString label = QFileInfo(buf).fileName();
+            QFile bufFile(buf);
+            if (!bufFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                out << "  " << label.leftJustified(14) << "ERROR\n    cannot read " << buf << "\n";
+                ++errors;
+                continue;
+            }
+            const QString rawBuf = QString::fromUtf8(bufFile.readAll());
+            QString err;
+            const QString expanded =
+                ShaderCompiler::expandSource(rawBuf, QFileInfo(buf).absolutePath(), includePaths, &err);
+            if (expanded.isEmpty()) {
+                out << "  " << label.leftJustified(14) << "ERROR\n    include expansion failed: " << err << "\n";
+                ++errors;
+            } else {
+                const ShaderCompiler::Result result =
+                    ShaderCompiler::compile(expanded.toUtf8(), QShader::FragmentStage);
+                errors += reportCompile(out, label, result, declaredParamNames(eff.parameters));
             }
         }
     }

@@ -188,6 +188,21 @@ PlasmaZonesEffect::PlasmaZonesEffect()
                 m_shaderManager.m_textureCache.clear();
             });
 
+    // Surface shader pack hot-reload: when a data/surface pack changes on disk,
+    // drop the compiled surface shader so the next paint recompiles the selected
+    // pack against the new source, and repaint so decorated windows pick it up.
+    // The surface shader is shared (not per-transition), so there is no
+    // per-window transition cache to drain first — unlike the animation registry
+    // above. The next borderShader() call recompiles lazily.
+    connect(&m_surfaceShaderRegistry, &PhosphorSurfaceShaders::SurfaceShaderRegistry::effectsChanged, this, [this]() {
+        m_borderShader.reset();
+        m_surfaceShaderCompiledId.clear();
+        m_borderShaderCompileFailed = false;
+        if (KWin::effects) {
+            KWin::effects->addRepaintFull();
+        }
+    });
+
     // Frame-geometry shadow flush timer. Debounces per-window
     // windowFrameGeometryChanged signals and pushes the latest geometry to
     // the daemon at ~20Hz so daemon-local shortcut handlers (float toggle,
@@ -845,6 +860,7 @@ PlasmaZonesEffect::~PlasmaZonesEffect()
     // cache members are gone — UAF. Disconnect now while everything is still
     // alive.
     disconnect(&m_shaderManager.m_animationShaderRegistry, nullptr, this, nullptr);
+    disconnect(&m_surfaceShaderRegistry, nullptr, this, nullptr);
 
     // Drain the texture loader pool before any other teardown. A
     // worker that's mid-rasterise would otherwise post a queued

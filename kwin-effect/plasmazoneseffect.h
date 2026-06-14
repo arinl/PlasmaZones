@@ -701,6 +701,22 @@ private:
     /// border is applied and no transition owns the slot.
     void pushBorderUniforms(KWin::EffectWindow* w, const WindowBorder& border, qreal scale);
 
+    /// Render the window's active surface-layer stack into @p transition's
+    /// ping-pong FBO chain and return the texture holding the final composited
+    /// surface, or nullptr when the window has no active surface layers (the
+    /// caller then animates the bare `uTexture0`). Called once per animated frame
+    /// from paintWindow's transition branch BEFORE the animation draw: the
+    /// returned texture is bound as `uSurfaceLayer` so the animation composites
+    /// over the layered surface (border / rounded corners, future tint/glow) and
+    /// the border stays visible through the whole transition.
+    ///
+    /// Layer 0 is the border: the raw window is rendered through the border
+    /// shader into the chain via OffscreenData (mirrors captureOldWindowSnapshot,
+    /// reusing the existing border shader + its MVP vertex path), so it shares
+    /// uTexture0's layout. Additional layers chain as passthrough-quad FBO→FBO
+    /// blits (ping-pong). Implemented in surfacelayers.cpp.
+    KWin::GLTexture* renderSurfaceChain(ShaderTransition& transition, KWin::EffectWindow* w, qreal scale);
+
     /// Compiled border MapTexture shader + cached uniform locations. The shader
     /// is shared by every bordered window (uniforms are per-window); compiled
     /// once on first border, owned for the effect's lifetime.

@@ -776,6 +776,16 @@ bool PlasmaZonesEffect::beginShaderTransition(KWin::EffectWindow* window,
         cached.iFromRectLoc = shader->uniformLocation(PhosphorAnimationShaders::AnimationShaderContract::kIFromRect);
         cached.iToRectLoc = shader->uniformLocation(PhosphorAnimationShaders::AnimationShaderContract::kIToRect);
         cached.iOldWindowLoc = shader->uniformLocation(PhosphorAnimationShaders::AnimationShaderContract::kUOldWindow);
+        // Surface-layer-stack uniforms — every animation shader resolves these
+        // (declared in the shared header and read through surfaceColor()), so
+        // they are valid whenever the shader samples the window surface. The
+        // kwin-effect binds the layered surface + flag each frame; a window with
+        // no surface layers pushes the flag as 0 and the shader samples the bare
+        // uTexture0. See AnimationShaderContract::kUSurfaceLayer / kIHasSurfaceLayer.
+        cached.uSurfaceLayerLoc =
+            shader->uniformLocation(PhosphorAnimationShaders::AnimationShaderContract::kUSurfaceLayer);
+        cached.iHasSurfaceLayerLoc =
+            shader->uniformLocation(PhosphorAnimationShaders::AnimationShaderContract::kIHasSurfaceLayer);
         // SetOpacity rule opacity — a separate concern from the morph uniforms
         // above: applies to ALL shaders (compositor path only), so surfaceColor
         // can dim the surface for a SetOpacity window rule. See

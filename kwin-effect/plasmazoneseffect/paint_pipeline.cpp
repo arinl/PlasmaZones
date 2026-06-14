@@ -614,6 +614,16 @@ void PlasmaZonesEffect::paintWindow(const KWin::RenderTarget& renderTarget, cons
             const QVector4D anchorRectInTexture = transition.surfaceExtent
                 ? ShaderInternal::computeTextureSubRect(anchorGeo, expandedGeo)
                 : QVector4D(0.0f, 0.0f, 1.0f, 1.0f);
+            // Surface-layer stack (border / rounded corners, ...): render the
+            // window's active layers into an FBO so the animation composites
+            // OVER the layered surface and the border stays visible for the
+            // whole transition instead of vanishing when the animation shader
+            // takes the draw slot. Runs BEFORE the animation shader is bound —
+            // it briefly swaps the redirect's bound shader to the border and
+            // back, so it must not sit inside the ShaderBinder scope below.
+            // Null when the window has no surface layers (the common no-border
+            // case), in which case surfaceColor() samples the bare uTexture0.
+            KWin::GLTexture* const surfaceLayerTex = renderSurfaceChain(transition, w, viewport.scale());
             {
                 KWin::ShaderBinder binder(shader);
                 if (cached->iTimeLoc >= 0) {
@@ -897,6 +907,23 @@ void PlasmaZonesEffect::paintWindow(const KWin::RenderTarget& renderTarget, cons
                     glActiveTexture(GL_TEXTURE0 + kOldSnapshotUnit);
                     transition.oldSnapshot->bind();
                 }
+                // Surface-layer stack (uSurfaceLayer). When renderSurfaceChain
+                // composited the window's layers (border / rounded corners, ...)
+                // into an FBO, bind it to a dedicated unit just past the
+                // old-snapshot slot and flag surfaceColor() to sample it in place
+                // of the bare uTexture0 — the animation then runs OVER the
+                // layered surface. Always push the flag (0 when no layer) so a
+                // window with no surface layers animates uTexture0 unchanged.
+                if (cached->iHasSurfaceLayerLoc >= 0) {
+                    shader->setUniform(cached->iHasSurfaceLayerLoc, surfaceLayerTex ? 1 : 0);
+                }
+                if (surfaceLayerTex && cached->uSurfaceLayerLoc >= 0) {
+                    constexpr int kSurfaceLayerUnit =
+                        2 + PhosphorAnimationShaders::AnimationShaderContract::kMaxUserTextureSlots;
+                    shader->setUniform(cached->uSurfaceLayerLoc, kSurfaceLayerUnit);
+                    glActiveTexture(GL_TEXTURE0 + kSurfaceLayerUnit);
+                    surfaceLayerTex->bind();
+                }
                 // Restore TEXTURE0 as the active unit so KWin's
                 // OffscreenData::paint binds the redirected surface
                 // to the unit it expects (its `m_texture->bind()` runs
@@ -959,6 +986,15 @@ void PlasmaZonesEffect::paintWindow(const KWin::RenderTarget& renderTarget, cons
                 constexpr int kOldSnapshotUnit =
                     1 + PhosphorAnimationShaders::AnimationShaderContract::kMaxUserTextureSlots;
                 glActiveTexture(GL_TEXTURE0 + kOldSnapshotUnit);
+                glBindTexture(GL_TEXTURE_2D, 0);
+            }
+            // Same hygiene for the surface-layer unit (uSurfaceLayer), bound one
+            // unit past the old-snapshot slot — don't leave the layered surface
+            // dangling on its unit for the next effect in the chain.
+            if (surfaceLayerTex && cached->uSurfaceLayerLoc >= 0) {
+                constexpr int kSurfaceLayerUnit =
+                    2 + PhosphorAnimationShaders::AnimationShaderContract::kMaxUserTextureSlots;
+                glActiveTexture(GL_TEXTURE0 + kSurfaceLayerUnit);
                 glBindTexture(GL_TEXTURE_2D, 0);
             }
             glActiveTexture(GL_TEXTURE0);

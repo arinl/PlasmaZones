@@ -150,6 +150,15 @@ struct CachedShader
     int iFromRectLoc = -1;
     int iToRectLoc = -1;
     int iOldWindowLoc = -1;
+    /// Surface-layer-stack uniforms (compositor path). `uSurfaceLayer` is the
+    /// pre-composited layered surface (border / rounded corners, ...) sampled in
+    /// place of the live `uTexture0` while a layered window animates;
+    /// `iHasSurfaceLayer` gates the redirect. Both resolve in every animation
+    /// shader (declared in the shared header), so they are non-negative whenever
+    /// the shader reads the surface through `surfaceColor()`. See
+    /// AnimationShaderContract::kUSurfaceLayer / kIHasSurfaceLayer.
+    int uSurfaceLayerLoc = -1;
+    int iHasSurfaceLayerLoc = -1;
 };
 
 /// Per-window in-flight shader transition.
@@ -323,6 +332,23 @@ struct ShaderTransition
     /// was not requested or failed — paintWindow then binds a transparent
     /// fallback (or the shader falls back to a non-cross-fade morph).
     std::unique_ptr<KWin::GLTexture> oldSnapshot;
+
+    /// Surface-layer-stack render targets (compositor path). The window's
+    /// surface with its active surface layers (border / rounded corners today;
+    /// tint / glow / ... in future) composited in order, rendered each animated
+    /// frame so the animation samples the LAYERED surface (bound as
+    /// `uSurfaceLayer`) instead of the bare live `uTexture0` — surface layers
+    /// stay visible for the whole transition rather than vanishing when the
+    /// animation shader takes the draw slot.
+    ///
+    /// Two textures for ping-pong chaining when more than one layer is active
+    /// (layer N reads slot `N%2`, writes slot `(N+1)%2`); a single-layer stack
+    /// (the common border-only case) uses slot 0 alone. Reused across frames and
+    /// reallocated only when the window's expanded size × scale changes; freed
+    /// with the transition. `renderSurfaceChain` returns the slot holding the
+    /// final composited surface.
+    std::array<std::unique_ptr<KWin::GLTexture>, 2> surfaceLayerChain;
+    QSize surfaceLayerChainSize;
 };
 
 /// First-frame suppression bookkeeping for a window that is about to be

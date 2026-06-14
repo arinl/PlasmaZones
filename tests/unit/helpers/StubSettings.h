@@ -971,6 +971,30 @@ public:
         Q_EMIT autotilePerAlgorithmSettingsChanged();
         Q_EMIT settingsChanged();
     }
+    QString surfaceShaderEffectId() const override
+    {
+        return m_surfaceShaderEffectId;
+    }
+    void setSurfaceShaderEffectId(const QString& effectId) override
+    {
+        if (m_surfaceShaderEffectId == effectId)
+            return;
+        m_surfaceShaderEffectId = effectId;
+        Q_EMIT surfaceShaderEffectIdChanged();
+        Q_EMIT settingsChanged();
+    }
+    QVariantMap surfaceShaderParameters() const override
+    {
+        return m_surfaceShaderParameters;
+    }
+    void setSurfaceShaderParameters(const QVariantMap& parameters) override
+    {
+        if (m_surfaceShaderParameters == parameters)
+            return;
+        m_surfaceShaderParameters = parameters;
+        Q_EMIT surfaceShaderParametersChanged();
+        Q_EMIT settingsChanged();
+    }
     QString loadColorsFromFile(const QString&) override
     {
         // Stub returns "not supported" so a test that exercised this
@@ -1196,6 +1220,8 @@ private:
     int m_animationMinimumWindowWidth = ConfigDefaults::animationMinimumWindowWidth();
     int m_animationMinimumWindowHeight = ConfigDefaults::animationMinimumWindowHeight();
     QVariantMap m_autotilePerAlgorithmSettings;
+    QString m_surfaceShaderEffectId = ConfigDefaults::surfaceShaderEffectId();
+    QVariantMap m_surfaceShaderParameters = ConfigDefaults::surfaceShaderParameters();
     QString m_editorDuplicateShortcut = ConfigDefaults::editorDuplicateShortcut();
     QString m_editorSplitHorizontalShortcut = ConfigDefaults::editorSplitHorizontalShortcut();
     QString m_editorSplitVerticalShortcut = ConfigDefaults::editorSplitVerticalShortcut();

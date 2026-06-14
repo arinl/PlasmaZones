@@ -107,6 +107,15 @@ void SettingsController::buildApplicationController()
     // to m_domains so applyAllAsync walks it, exactly as registerPage would
     // have, but without claiming a sidebar/registry id of its own.
     m_app->registerDomain(m_animationsPage);
+    // Surface (window-decoration) shaders — a top-level leaf in the
+    // per-feature block. GLOBAL scope: one decoration-shader pack applies to
+    // every decorated window, so it sits at the top level rather than under a
+    // placement-mode category. Registered as a regPage (its controller is a
+    // PageController subclass), but with no per-page staged state — dirty
+    // tracking rides the global Settings-property NOTIFY loop like the General
+    // page. See SurfaceShaderPageController's class doc.
+    regPage(m_surfaceShaderPage, QString(), PhosphorI18n::tr("Decoration"), QStringLiteral("SurfaceShaderPage.qml"),
+            QStringLiteral("preferences-desktop-display"));
     // Window Rules is a top-level leaf (its old "Rules" parent retired after
     // the v4 fold left a single rule surface). Divider after it closes the
     // feature block and opens the tools-and-meta block below.
@@ -514,6 +523,7 @@ const QSet<QString>& SettingsController::validPageNames()
         QStringLiteral("tiling-shortcuts"),
         QStringLiteral("snapping-ordering"),
         QStringLiteral("tiling-ordering"),
+        QStringLiteral("surface-shaders"),
         QStringLiteral("window-rules"),
         QStringLiteral("editor"),
         QStringLiteral("general"),

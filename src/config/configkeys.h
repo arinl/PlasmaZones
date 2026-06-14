@@ -114,6 +114,12 @@ public:
     P_CONFIG_GROUP(tilingAppearanceBordersGroup, "Tiling.Appearance.Borders")
     P_CONFIG_GROUP(tilingGapsGroup, "Tiling.Gaps")
 
+    // Surface — global surface-shader selection (one pack for all decorated
+    // windows). A flat top-level group rather than a per-mode sub-group of
+    // Tiling/Snapping because the surface pack is product-wide, not bound to a
+    // tiling/snapping appearance axis.
+    P_CONFIG_GROUP(surfaceGroup, "Surface")
+
     // Parent groups (for purge enumeration — covers all sub-groups)
     P_CONFIG_GROUP(shortcutsGroup, "Shortcuts")
     P_CONFIG_GROUP(editorGroup, "Editor")
@@ -358,6 +364,13 @@ public:
 
     P_CONFIG_KEY(showBorderKey, "ShowBorder")
     // (also uses widthKey, radiusKey)
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Config Keys — Surface
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    P_CONFIG_KEY(surfaceShaderEffectIdKey, "ShaderEffectId")
+    P_CONFIG_KEY(surfaceShaderParametersKey, "ShaderParameters")
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Config Keys — Tiling.Gaps

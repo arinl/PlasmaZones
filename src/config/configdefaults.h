@@ -801,6 +801,26 @@ public:
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Surface shader Settings
+    //
+    // Global (one pack for all decorated windows): the selected surface shader
+    // pack id and a per-pack parameter override map (paramId -> value). The
+    // group/key accessors (surfaceGroup / surfaceShaderEffectIdKey /
+    // surfaceShaderParametersKey) are inherited from ConfigKeys — no forwarding
+    // accessors needed here (same as every other group: ConfigDefaults derives
+    // from ConfigKeys).
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    static QString surfaceShaderEffectId()
+    {
+        return QStringLiteral("border");
+    }
+    static QVariantMap surfaceShaderParameters()
+    {
+        return {};
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Autotile Settings
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1578,6 +1598,14 @@ public:
     static QString userOverlayShadersSubdir()
     {
         return QStringLiteral("/plasmazones/shaders");
+    }
+
+    /// Surface shader packs (the `data/surface/` family — border, etc.).
+    /// Mirrors the `userAnimationsSubdir()` convention so settings + daemon
+    /// + compositor code share one source of truth for the on-disk location.
+    static QString userSurfaceSubdir()
+    {
+        return QStringLiteral("/plasmazones/surface");
     }
 
 private:

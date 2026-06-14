@@ -305,6 +305,7 @@ QStringList Settings::managedGroupNames()
         ConfigDefaults::animationsWindowFilteringGroup(), // "Animations.WindowFiltering"
         ConfigDefaults::editorGroup(), // "Editor" — covers Editor.Shortcuts + Editor.Snapping + Editor.FillOnDrop
         ConfigDefaults::orderingGroup(), // "Ordering"
+        ConfigDefaults::surfaceGroup(), // "Surface" — global surface-shader pack id + parameter overrides
     };
 }
 
@@ -2191,6 +2192,33 @@ void Settings::setAutotilePerAlgorithmSettings(const QVariantMap& value)
     }
     m_store->write(ConfigDefaults::tilingAlgorithmGroup(), ConfigDefaults::perAlgorithmSettingsKey(), sanitized);
     Q_EMIT autotilePerAlgorithmSettingsChanged();
+    Q_EMIT settingsChanged();
+}
+
+// ── Surface (PhosphorConfig::Store-backed) ──────────────────────────────────
+// Global surface-shader selection: an opaque pack id (QString, stored as-is)
+// and a per-pack parameter override map (QVariantMap). The id mirrors the
+// other plain string settings via P_STORE_SET_STRING. The parameter map has
+// no P_STORE_SET_MAP macro to mirror, so it is hand-written like
+// autotilePerAlgorithmSettings above (read via readVariant().toMap(),
+// changed-check + emit) — minus the sanitizer, because the override schema is
+// per-pack and not known to the config layer.
+P_STORE_GET(QString, surfaceShaderEffectId, surfaceGroup, surfaceShaderEffectIdKey, QString)
+P_STORE_SET_STRING(setSurfaceShaderEffectId, surfaceGroup, surfaceShaderEffectIdKey, surfaceShaderEffectIdChanged)
+
+QVariantMap Settings::surfaceShaderParameters() const
+{
+    // Schema declares this key as QVariantMap, so the Store routes it through
+    // IGroup::writeJson → native JSON object on disk; read it back as a map.
+    return m_store->readVariant(ConfigDefaults::surfaceGroup(), ConfigDefaults::surfaceShaderParametersKey()).toMap();
+}
+void Settings::setSurfaceShaderParameters(const QVariantMap& parameters)
+{
+    if (surfaceShaderParameters() == parameters) {
+        return;
+    }
+    m_store->write(ConfigDefaults::surfaceGroup(), ConfigDefaults::surfaceShaderParametersKey(), parameters);
+    Q_EMIT surfaceShaderParametersChanged();
     Q_EMIT settingsChanged();
 }
 

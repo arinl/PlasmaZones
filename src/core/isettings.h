@@ -204,6 +204,17 @@ public:
     virtual QVariantMap autotilePerAlgorithmSettings() const = 0;
     virtual void setAutotilePerAlgorithmSettings(const QVariantMap& settings) = 0;
 
+    // Global surface-shader selection — ONE pack for all decorated windows
+    // (simpler than the per-event animation-shader model). The selected
+    // pack id plus a per-pack parameter override map (paramId -> value).
+    // Lives on the interface so SurfaceShaderPageController can depend on
+    // ISettings (not the concrete Settings) per CLAUDE.md, letting unit
+    // tests stub it. Mirrors autotilePerAlgorithmSettings above.
+    virtual QString surfaceShaderEffectId() const = 0;
+    virtual void setSurfaceShaderEffectId(const QString& effectId) = 0;
+    virtual QVariantMap surfaceShaderParameters() const = 0;
+    virtual void setSurfaceShaderParameters(const QVariantMap& parameters) = 0;
+
     // Color-import helper used by SnappingZonesController. Returns
     // an empty string on success, a user-readable error message
     // otherwise. The signature mirrors Settings::loadColorsFromFile
@@ -522,6 +533,10 @@ Q_SIGNALS:
     void autotileSplitRatioStepChanged();
     void autotileMasterCountChanged();
     void autotilePerAlgorithmSettingsChanged();
+    // Global surface-shader selection (see surfaceShaderEffectId /
+    // surfaceShaderParameters above).
+    void surfaceShaderEffectIdChanged();
+    void surfaceShaderParametersChanged();
     void autotileInnerGapChanged();
     void autotileOuterGapChanged();
     void autotileUsePerSideOuterGapChanged();

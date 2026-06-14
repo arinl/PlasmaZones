@@ -35,6 +35,7 @@ PhosphorConfig::Schema buildSettingsSchema()
     appendActivationSchema(s);
     appendBehaviorSchema(s);
     appendAutotilingSchema(s);
+    appendSurfaceSchema(s);
 
     return s;
 }
@@ -874,6 +875,25 @@ void appendAutotilingSchema(PhosphorConfig::Schema& schema)
          {},
          clampInt(CD::autotileOuterGapRightMin(), CD::autotileOuterGapRightMax())},
         {CD::smartGapsKey(), CD::autotileSmartGaps(), QMetaType::Bool},
+    };
+}
+
+// ─── Surface ────────────────────────────────────────────────────────────────
+// Global surface-shader selection: a single pack id (QString) and a per-pack
+// parameter override map (QVariantMap, paramId -> value) shared by all
+// decorated windows. The id is an opaque pack identifier validated by the
+// shader consumer, so no schema validator here (mirrors the rendering-backend
+// pattern's "stored as-is" intent without coercion). The parameter map
+// persists as a nested JSON object — same QVariantMap storage shape as the
+// autotile PerAlgorithmSettings entry above, but with no sanitizer because the
+// override schema is per-pack and not known to the config layer.
+
+void appendSurfaceSchema(PhosphorConfig::Schema& schema)
+{
+    using CD = ConfigDefaults;
+    schema.groups[CD::surfaceGroup()] = {
+        {CD::surfaceShaderEffectIdKey(), CD::surfaceShaderEffectId(), QMetaType::QString},
+        {CD::surfaceShaderParametersKey(), CD::surfaceShaderParameters(), QMetaType::QVariantMap},
     };
 }
 

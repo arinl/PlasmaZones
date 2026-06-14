@@ -46,6 +46,7 @@
 #include "snappingshaderspagecontroller.h"
 
 #include <PhosphorAnimation/AnimationShaderRegistry.h>
+#include <PhosphorSurface/SurfaceShaderRegistry.h>
 #include <PhosphorLayoutApi/LayoutPreview.h>
 #include <PhosphorScreens/ScreenIdentity.h>
 #include <PhosphorScreens/VirtualScreen.h>
@@ -456,6 +457,36 @@ SettingsController::SettingsController(QObject* parent)
         setNeedsSave(true);
         endExternalEdit();
     });
+
+    // Surface shader registry — settings-side mirror of the daemon's /
+    // compositor's. Scans the same XDG `plasmazones/surface` dirs
+    // independently; FS watching keeps each in sync without IPC. Mirrors
+    // the animation-shader registry block above (XDG search paths + user
+    // dir, materialised before registration so the watcher attaches a
+    // direct watch).
+    m_surfaceShaderRegistry = new PhosphorSurfaceShaders::SurfaceShaderRegistry(this);
+    {
+        const QString subdir = ConfigDefaults::userSurfaceSubdir();
+        QStringList surfaceDirs = QStandardPaths::locateAll(QStandardPaths::GenericDataLocation, subdir.mid(1),
+                                                            QStandardPaths::LocateDirectory);
+        std::reverse(surfaceDirs.begin(), surfaceDirs.end());
+        const QString userSurfaceDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + subdir;
+        if (!surfaceDirs.contains(userSurfaceDir))
+            surfaceDirs.append(userSurfaceDir);
+        QDir().mkpath(userSurfaceDir);
+        m_surfaceShaderRegistry->setUserPath(userSurfaceDir);
+        m_surfaceShaderRegistry->addSearchPaths(surfaceDirs);
+    }
+
+    // Surface (window-decoration) shader page sub-controller. GLOBAL scope:
+    // one pack for every decorated window. The selection persists via the
+    // Settings surfaceShaderEffectId / surfaceShaderParameters Q_PROPERTYs,
+    // whose NOTIFY signals the meta-object loop above already routes into
+    // onSettingsPropertyChanged for dirty tracking — so this controller
+    // needs no per-page staging (isDirty/apply/discard are no-ops). It is
+    // registered with the framework as a regPage (NOT a headless domain)
+    // in buildApplicationController.
+    m_surfaceShaderPage = new SurfaceShaderPageController(m_surfaceShaderRegistry, &m_settings, this);
 
     // Window Rules page sub-controller — the unified rule surface. It owns
     // its own WindowRuleModel and talks to the daemon's

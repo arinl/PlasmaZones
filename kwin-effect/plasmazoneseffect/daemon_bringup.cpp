@@ -738,6 +738,22 @@ void PlasmaZonesEffect::loadCachedSettings()
         }
     });
 
+    // Global surface shader pack selection: which surface pack renders the window
+    // decoration (the border / rounded-corner pack today). Changing it swaps the
+    // compiled surface shader — borderShader() recompiles when m_surfaceShaderId
+    // differs from the last-compiled id, so resetting the cache here is enough.
+    // An empty or unknown id leaves the current pack in place (the registry
+    // lookup in borderShader() fails closed). updateAllBorders() repaints.
+    loadSettingAsync(QStringLiteral("surfaceShaderEffectId"), [this](const QVariant& v) {
+        const QString packId = v.toString();
+        if (!packId.isEmpty() && m_surfaceShaderId != packId) {
+            m_surfaceShaderId = packId;
+            m_borderShader.reset();
+            m_borderShaderCompileFailed = false;
+            updateAllBorders();
+        }
+    });
+
     loadSettingAsync(QStringLiteral("autotileFocusFollowsMouse"), [this](const QVariant& v) {
         m_autotileHandler->setFocusFollowsMouse(v.toBool());
     });

@@ -851,6 +851,7 @@ target_link_libraries(plasmazones-shader-validate
         PhosphorRendering::PhosphorRendering
         PhosphorShaders::PhosphorShaders
         PhosphorAnimation::PhosphorAnimation
+        PhosphorSurface::PhosphorSurface
         Qt6::Core
         Qt6::GuiPrivate
         Qt6::ShaderToolsPrivate
@@ -867,6 +868,8 @@ if(BUILD_TESTING)
              COMMAND plasmazones-shader-validate --overlay ${PROJECT_SOURCE_DIR}/data/shaders)
     add_test(NAME shader_validate_animations
              COMMAND plasmazones-shader-validate --animation ${PROJECT_SOURCE_DIR}/data/animations)
+    add_test(NAME shader_validate_surface
+             COMMAND plasmazones-shader-validate --surface ${PROJECT_SOURCE_DIR}/data/surface)
 endif()
 
 # Standalone settings app (no KDE Frameworks required)

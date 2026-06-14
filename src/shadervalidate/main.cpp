@@ -35,6 +35,9 @@
 #include <PhosphorShaders/ShaderIncludeResolver.h>
 #include <PhosphorShaders/ShaderParamPreamble.h>
 #include <PhosphorShaders/ShaderRegistry.h>
+#include <PhosphorSurface/SurfaceShaderContract.h>
+#include <PhosphorSurface/SurfaceShaderEffect.h>
+#include <PhosphorSurface/SurfaceShaderRegistry.h>
 
 #include <QDir>
 #include <QFile>
@@ -54,6 +57,8 @@ using PhosphorAnimationShaders::AnimationShaderRegistry;
 using PhosphorRendering::ShaderCompiler;
 using PhosphorShaders::ShaderIncludeResolver;
 using PhosphorShaders::ShaderRegistry;
+using PhosphorSurfaceShaders::SurfaceShaderEffect;
+using PhosphorSurfaceShaders::SurfaceShaderRegistry;
 
 namespace {
 
@@ -160,6 +165,14 @@ QStringList declaredParamNames(const QList<AnimationShaderEffect::ParameterInfo>
 {
     QStringList declared;
     for (const AnimationShaderEffect::ParameterInfo& p : params) {
+        declared << QStringLiteral("p_") + p.id;
+    }
+    return declared;
+}
+QStringList declaredParamNames(const QList<SurfaceShaderEffect::ParameterInfo>& params)
+{
+    QStringList declared;
+    for (const SurfaceShaderEffect::ParameterInfo& p : params) {
         declared << QStringLiteral("p_") + p.id;
     }
     return declared;
@@ -462,6 +475,122 @@ int validateAnimationPack(const QString& packDir, QTextStream& out)
     return errors;
 }
 
+// Validate one SURFACE pack directory (data/surface/*). Reproduces the surface
+// runtime's fragment assembly on the daemon (Qt-RHI) path — include expansion +
+// the generated p_<id> preamble (surface packs ship a plain main(), no entry
+// scaffold) — then bakes through headless glslang. Returns the error count.
+//
+// As with animation packs, the kwin-effect classic-GL branch
+// (`#define PLASMAZONES_KWIN`, default-block uniforms) is NOT baked here:
+// QShaderBaker compiles Vulkan-dialect GLSL and rejects default-block uniforms.
+// Baking the #else branch validates the daemon UBO contract in
+// surface_uniforms.glsl; the PLASMAZONES_KWIN plumbing is identical for every
+// pack and exercised by the live compositor compile.
+int validateSurfacePack(const QString& packDir, QTextStream& out)
+{
+    const QString name = QFileInfo(packDir).fileName();
+
+    QFile metaFile(QDir(packDir).filePath(QStringLiteral("metadata.json")));
+    if (!metaFile.open(QIODevice::ReadOnly)) {
+        out << name << "\n  metadata      ERROR\n    cannot read metadata.json\n  → 1 error\n\n";
+        return 1;
+    }
+    QJsonParseError perr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(metaFile.readAll(), &perr);
+    if (doc.isNull() || !doc.isObject()) {
+        out << name << "\n  metadata      ERROR\n    invalid JSON: " << perr.errorString() << "\n  → 1 error\n\n";
+        return 1;
+    }
+
+    SurfaceShaderEffect eff = SurfaceShaderEffect::fromJson(doc.object());
+    eff.sourceDir = QDir(packDir).absolutePath();
+    // Mirror SurfaceShaderRegistry::parseEffect: the fragment path comes from the
+    // metadata `fragmentShader` field, resolved relative to the pack dir.
+    if (!eff.fragmentShaderPath.isEmpty()) {
+        eff.fragmentShaderPath = QDir(packDir).filePath(eff.fragmentShaderPath);
+    }
+    if (!eff.isValid()) {
+        out << name << "\n  metadata      ERROR\n    missing required field (id / fragmentShader)\n  → 1 error\n\n";
+        return 1;
+    }
+    const QString fragLabel = QFileInfo(eff.fragmentShaderPath).fileName();
+
+    out << name << "  (" << eff.parameters.size() << " param" << (eff.parameters.size() == 1 ? "" : "s") << ", "
+        << eff.textures.size() << " texture" << (eff.textures.size() == 1 ? "" : "s") << ")\n";
+
+    int errors = 0;
+
+    // ── metadata lints ──
+    static const QStringList kSurfaceParamTypes = {QStringLiteral("float"), QStringLiteral("int"),
+                                                   QStringLiteral("bool"), QStringLiteral("color")};
+    QStringList lints;
+    for (const SurfaceShaderEffect::ParameterInfo& p : eff.parameters) {
+        if (!kSurfaceParamTypes.contains(p.type)) {
+            lints << QStringLiteral("unknown param type '%1' for '%2' (surface params are float/int/bool/color)")
+                         .arg(p.type, p.id);
+        }
+        if (!PhosphorShaders::isValidParamId(p.id)) {
+            lints
+                << QStringLiteral("invalid parameter id '%1' (not a GLSL identifier; skipped, no p_ define)").arg(p.id);
+        }
+    }
+    const QJsonArray declaredTextures = doc.object().value(QLatin1String("textures")).toArray();
+    if (declaredTextures.size() > PhosphorSurfaceShaders::SurfaceShaderContract::kMaxUserTextureSlots) {
+        lints << QStringLiteral("too many textures: %1 declared, cap is %2 (surplus dropped at load)")
+                     .arg(static_cast<int>(declaredTextures.size()))
+                     .arg(PhosphorSurfaceShaders::SurfaceShaderContract::kMaxUserTextureSlots);
+    }
+    for (const QJsonValue& v : declaredTextures) {
+        if (v.toObject().value(QLatin1String("path")).toString().isEmpty()) {
+            lints << QStringLiteral("texture entry with empty `path` (dropped at load)");
+        }
+    }
+    if (!QFile::exists(eff.fragmentShaderPath)) {
+        lints << QStringLiteral("fragment shader missing: %1").arg(fragLabel);
+    }
+
+    if (lints.isEmpty()) {
+        out << "  metadata      OK\n";
+    } else {
+        out << "  metadata      ERROR\n";
+        for (const QString& l : lints) {
+            out << "    " << l << "\n";
+            ++errors;
+        }
+    }
+
+    // ── stage compile (reproduce the daemon runtime fragment assembly) ──
+    if (QFile::exists(eff.fragmentShaderPath)) {
+        QFile frag(eff.fragmentShaderPath);
+        if (!frag.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            out << "  " << fragLabel.leftJustified(14) << "ERROR\n    cannot read " << eff.fragmentShaderPath << "\n";
+            ++errors;
+        } else {
+            const QString raw = QString::fromUtf8(frag.readAll());
+            const QStringList includePaths = {QFileInfo(packDir).absolutePath() + QStringLiteral("/shared")};
+            QString err;
+            const QString expanded =
+                ShaderCompiler::expandSource(raw, QFileInfo(eff.fragmentShaderPath).absolutePath(), includePaths, &err);
+            if (expanded.isEmpty()) {
+                out << "  " << fragLabel.leftJustified(14) << "ERROR\n    include expansion failed: " << err << "\n";
+                ++errors;
+            } else {
+                const QString spliced =
+                    PhosphorShaders::spliceAfterVersion(expanded, SurfaceShaderRegistry::paramPreamble(eff));
+                const ShaderCompiler::Result result = ShaderCompiler::compile(spliced.toUtf8(), QShader::FragmentStage);
+                errors += reportCompile(out, fragLabel, result, declaredParamNames(eff.parameters));
+            }
+        }
+    }
+
+    if (errors == 0) {
+        out << "  → OK\n\n";
+    } else {
+        out << "  → " << errors << (errors == 1 ? " error\n\n" : " errors\n\n");
+    }
+    return errors;
+}
+
 bool isPackDir(const QString& dir)
 {
     return QFile::exists(QDir(dir).filePath(QStringLiteral("metadata.json")));
@@ -472,7 +601,8 @@ bool isPackDir(const QString& dir)
 // glslls / glsl-language-server autocomplete, and the include resolver skips it
 // at load (ShaderIncludeResolver::GeneratedPreambleInclude), so it neither ships
 // nor affects the compiled shader. Returns 0 on success, 1 on error.
-int emitPreamble(const QString& packDir, bool animationMode, bool quiet, QTextStream& out, QTextStream& errStream)
+int emitPreamble(const QString& packDir, bool animationMode, bool surfaceMode, bool quiet, QTextStream& out,
+                 QTextStream& errStream)
 {
     const QString name = QFileInfo(packDir).fileName();
     QString preamble;
@@ -480,7 +610,26 @@ int emitPreamble(const QString& packDir, bool animationMode, bool quiet, QTextSt
     // sidecar pulls in the right base header per authoring model.
     QString baseHeader;
 
-    if (animationMode) {
+    if (surfaceMode) {
+        QFile metaFile(QDir(packDir).filePath(QStringLiteral("metadata.json")));
+        if (!metaFile.open(QIODevice::ReadOnly)) {
+            errStream << name << ": cannot read metadata.json\n";
+            return 1;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(metaFile.readAll());
+        if (!doc.isObject()) {
+            errStream << name << ": invalid metadata.json\n";
+            return 1;
+        }
+        SurfaceShaderEffect eff = SurfaceShaderEffect::fromJson(doc.object());
+        eff.sourceDir = QDir(packDir).absolutePath();
+        if (!eff.isValid()) {
+            errStream << name << ": invalid metadata.json (missing required field id / fragmentShader)\n";
+            return 1;
+        }
+        preamble = SurfaceShaderRegistry::paramPreamble(eff);
+        baseHeader = QStringLiteral("surface_uniforms.glsl");
+    } else if (animationMode) {
         QFile metaFile(QDir(packDir).filePath(QStringLiteral("metadata.json")));
         if (!metaFile.open(QIODevice::ReadOnly)) {
             errStream << name << ": cannot read metadata.json\n";
@@ -556,6 +705,9 @@ int main(int argc, char** argv)
     // authoring models (different metadata schema + entry convention), so the
     // mode is explicit and symmetric; later flag wins if both are given.
     bool animationMode = false;
+    // --surface: surface-layer packs (data/surface/*) — the window border /
+    // rounded-corner category. Mutually exclusive with --overlay / --animation.
+    bool surfaceMode = false;
     // --emit-preamble: don't validate — write each pack's `p_<id>` autocomplete
     // sidecar (T2.2) for editor tooling.
     bool emitMode = false;
@@ -565,8 +717,13 @@ int main(int argc, char** argv)
             quiet = true;
         } else if (a == QLatin1String("--animation") || a == QLatin1String("-a")) {
             animationMode = true;
+            surfaceMode = false;
+        } else if (a == QLatin1String("--surface") || a == QLatin1String("-s")) {
+            surfaceMode = true;
+            animationMode = false;
         } else if (a == QLatin1String("--overlay") || a == QLatin1String("-o")) {
             animationMode = false;
+            surfaceMode = false;
         } else if (a == QLatin1String("--emit-preamble")) {
             emitMode = true;
         } else {
@@ -574,10 +731,11 @@ int main(int argc, char** argv)
         }
     }
     if (args.isEmpty()) {
-        errStream << "usage: plasmazones-shader-validate [--quiet] [--overlay|--animation] [--emit-preamble] "
-                     "<pack-dir-or-root> [...]\n"
+        errStream << "usage: plasmazones-shader-validate [--quiet] [--overlay|--animation|--surface] "
+                     "[--emit-preamble] <pack-dir-or-root> [...]\n"
                   << "  --overlay         zone/overlay packs (data/shaders/*)        [default]\n"
                   << "  --animation       transition/animation packs (data/animations/*)\n"
+                  << "  --surface         surface-layer packs (data/surface/*)\n"
                   << "  --emit-preamble   write each pack's p_generated.glsl autocomplete sidecar (no validation)\n";
         return 2;
     }
@@ -613,7 +771,7 @@ int main(int argc, char** argv)
     if (emitMode) {
         int failed = 0;
         for (const QString& pack : packs) {
-            if (emitPreamble(pack, animationMode, quiet, out, errStream) != 0) {
+            if (emitPreamble(pack, animationMode, surfaceMode, quiet, out, errStream) != 0) {
                 ++failed;
             }
         }
@@ -631,7 +789,9 @@ int main(int argc, char** argv)
     for (const QString& pack : packs) {
         QString report;
         QTextStream reportStream(&report);
-        const int e = animationMode ? validateAnimationPack(pack, reportStream) : validatePack(pack, reportStream);
+        const int e = surfaceMode ? validateSurfacePack(pack, reportStream)
+            : animationMode       ? validateAnimationPack(pack, reportStream)
+                                  : validatePack(pack, reportStream);
         reportStream.flush();
         totalErrors += e;
         if (e > 0) {

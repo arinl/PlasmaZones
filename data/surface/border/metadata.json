@@ -1,0 +1,10 @@
+{
+    "id": "border",
+    "name": "Border",
+    "description": "Rounded corners and a window border. Clips the surface to a rounded rectangle and lays a configurable border band over the desktop, so a translucent border blends with what is behind the surface rather than its own content. The corner radius, border width and colour come from the host (the tiling border settings on the compositor), not from pack parameters.",
+    "author": "PlasmaZones",
+    "version": "1.0",
+    "category": "Decoration",
+    "fragmentShader": "effect.frag",
+    "parameters": []
+}

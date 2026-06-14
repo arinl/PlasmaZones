@@ -16,6 +16,7 @@
 #include <PhosphorAnimation/AnimationLimits.h>
 #include <PhosphorAnimation/CurveRegistry.h>
 #include <PhosphorAnimation/ProfilePaths.h>
+#include <PhosphorSurface/SurfaceShaderRegistry.h>
 
 #include <PhosphorWindowRule/RuleEvaluator.h>
 #include <PhosphorWindowRule/WindowRuleSet.h>
@@ -676,10 +677,19 @@ private:
     // clipped the inner surface). Coordinated with the per-window animation
     // transition on the SAME OffscreenEffect setShader() slot — see borders.cpp.
 
-    /// Lazily compile the border MapTexture shader on first use. Returns the
-    /// cached shader (or nullptr if compilation failed — borders then no-op).
-    /// Compiled once per effect lifetime; cleared on effect teardown.
+    /// Lazily compile the selected surface shader pack (window border / rounded
+    /// corners — the "border" pack by default) on first use, from data/surface
+    /// via the SurfaceShaderRegistry. Returns the cached compiled shader (or
+    /// nullptr if the pack is missing or compilation failed — decoration then
+    /// no-ops). Recompiled if the selected pack id changes; cleared on teardown.
+    /// Named borderShader() for continuity — the only surface pack today is the
+    /// border, and the decoration STATE still comes from the tiling BorderState.
     KWin::GLShader* borderShader();
+
+    /// Populate the surface-shader registry's search paths (the bundled
+    /// ${XDG_DATA_DIRS}/plasmazones/surface dirs + the user override) on first
+    /// use. One-shot: the registry's live-reload watcher then tracks pack edits.
+    void ensureSurfaceRegistryPaths();
 
     /// Decide and apply the desired offscreen shader for @p windowId / @p w:
     ///   • a transition is active (animation owns the slot) → leave it alone;
@@ -717,17 +727,32 @@ private:
     /// blits (ping-pong). Implemented in surfacelayers.cpp.
     KWin::GLTexture* renderSurfaceChain(ShaderTransition& transition, KWin::EffectWindow* w, qreal scale);
 
-    /// Compiled border MapTexture shader + cached uniform locations. The shader
-    /// is shared by every bordered window (uniforms are per-window); compiled
-    /// once on first border, owned for the effect's lifetime.
+    /// Surface-shader pack registry (the "surface" category: window border /
+    /// rounded corners today). Discovers data/surface packs; the effect compiles
+    /// the selected one. Search paths populated lazily via ensureSurfaceRegistryPaths.
+    PhosphorSurfaceShaders::SurfaceShaderRegistry m_surfaceShaderRegistry;
+    bool m_surfaceRegistryPathsAdded = false; ///< one-shot guard for the search-path population
+    /// Globally-selected surface pack id (default "border"). The tiling system
+    /// decides WHICH windows are decorated (BorderState); this picks the pack
+    /// that renders the decoration. Per-window-rule / per-daemon-surface
+    /// selection is a follow-up pass.
+    QString m_surfaceShaderId = QStringLiteral("border");
+    QString m_surfaceShaderCompiledId; ///< pack id m_borderShader was compiled for (recompile on change)
+
+    /// Compiled surface-pack MapTexture shader + cached contract uniform
+    /// locations. Shared by every decorated window (uniforms are per-window);
+    /// compiled on first use, owned for the effect's lifetime. The location
+    /// members map 1:1 to the surface contract uniforms (uSurfaceSize,
+    /// uSurfaceFrameTopLeft, uSurfaceFrameSize, uSurfaceRadius,
+    /// uSurfaceBorderWidth, uSurfaceColor).
     std::unique_ptr<KWin::GLShader> m_borderShader;
     bool m_borderShaderCompileFailed = false; ///< latch a failed compile so we don't retry every frame
-    int m_borderUWindowExpandedSizeLoc = -1;
-    int m_borderUFrameTopLeftLoc = -1; ///< frame top-left within the expanded FBO, device px (outline gate)
-    int m_borderUFrameSizeLoc = -1; ///< frame size excluding shadows, device px (SDF rect)
-    int m_borderURadiusLoc = -1; ///< outer corner radius, device px (SDF rounding)
-    int m_borderUThicknessLoc = -1;
-    int m_borderUOutlineColorLoc = -1;
+    int m_borderUWindowExpandedSizeLoc = -1; ///< uSurfaceSize — uTexture0 extent, device px
+    int m_borderUFrameTopLeftLoc = -1; ///< uSurfaceFrameTopLeft — frame top-left within the texture, device px
+    int m_borderUFrameSizeLoc = -1; ///< uSurfaceFrameSize — frame size excluding shadows, device px
+    int m_borderURadiusLoc = -1; ///< uSurfaceRadius — outer corner radius, device px
+    int m_borderUThicknessLoc = -1; ///< uSurfaceBorderWidth — decoration band thickness, device px
+    int m_borderUOutlineColorLoc = -1; ///< uSurfaceColor — resolved decoration colour (straight RGBA)
 
     /// Resolve which mode's BorderState manages @p windowId — autotile first,
     /// then snap — or nullptr if neither draws a border for it.

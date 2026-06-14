@@ -21,6 +21,8 @@
 #include <PhosphorShaders/ShaderEntryPoint.h>
 #include <PhosphorShaders/ShaderIncludeResolver.h>
 #include <PhosphorShaders/ShaderParamPreamble.h>
+#include <PhosphorSurface/SurfaceShaderContract.h>
+#include <PhosphorSurface/SurfaceShaderRegistry.h>
 #include <PhosphorWindowRule/ExclusionRules.h>
 #include <PhosphorWindowRule/RuleAction.h>
 #include <PhosphorWindowRule/WindowRule.h>
@@ -32,6 +34,7 @@
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QJsonDocument>
+#include <QStandardPaths>
 
 #include <effect/effecthandler.h>
 #include <opengl/glshader.h>
@@ -1809,6 +1812,150 @@ void PlasmaZonesEffect::loadShaderRegistryFromDbus()
                                     << m_shaderManager.m_animationShaderRegistry.availableEffects().size();
                             });
     });
+}
+
+void PlasmaZonesEffect::ensureSurfaceRegistryPaths()
+{
+    if (m_surfaceRegistryPathsAdded) {
+        return;
+    }
+    m_surfaceRegistryPathsAdded = true;
+    // Candidate dirs: every ${XDG_DATA_DIRS}/plasmazones/surface plus the user
+    // data dir (~/.local/share/plasmazones/surface), where CMake installs
+    // data/surface and where a user override would live. Added even when a dir
+    // is missing so the registry's watcher promotes a parent-watch and picks up
+    // packs that appear later (a fresh install). The daemon-delivered path
+    // mechanism the animation registry uses (loadShaderRegistryFromDbus) is a
+    // follow-up for surface packs; QStandardPaths covers the bundled pack today.
+    QStringList paths;
+    const QStringList bases = QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
+    paths.reserve(bases.size());
+    for (const QString& base : bases) {
+        paths.append(base + QStringLiteral("/plasmazones/surface"));
+    }
+    if (!paths.isEmpty()) {
+        m_surfaceShaderRegistry.addSearchPaths(paths);
+    }
+}
+
+KWin::GLShader* PlasmaZonesEffect::borderShader()
+{
+    // Recompile when the selected pack id changes; otherwise reuse the cached
+    // compile (success shader or failure latch) for the current id.
+    if (m_surfaceShaderCompiledId != m_surfaceShaderId) {
+        m_borderShader.reset();
+        m_borderShaderCompileFailed = false;
+        m_surfaceShaderCompiledId = m_surfaceShaderId;
+    }
+    if (m_borderShader) {
+        return m_borderShader.get();
+    }
+    if (m_borderShaderCompileFailed) {
+        return nullptr;
+    }
+    if (!KWin::effects) {
+        return nullptr;
+    }
+    ensureSurfaceRegistryPaths();
+
+    const PhosphorSurfaceShaders::SurfaceShaderEffect eff = m_surfaceShaderRegistry.effect(m_surfaceShaderId);
+    if (eff.id.isEmpty() || eff.fragmentShaderPath.isEmpty()) {
+        qCWarning(lcEffect) << "Surface shader pack" << m_surfaceShaderId << "not found in registry (effect count="
+                            << m_surfaceShaderRegistry.availableEffects().size()
+                            << ") — window decoration disabled this session";
+        m_borderShaderCompileFailed = true;
+        return nullptr;
+    }
+
+    QFile fragFile(eff.fragmentShaderPath);
+    if (!fragFile.open(QIODevice::ReadOnly)) {
+        qCWarning(lcEffect) << "Failed to open surface shader" << eff.fragmentShaderPath;
+        m_borderShaderCompileFailed = true;
+        return nullptr;
+    }
+    const QString rawSource = QString::fromUtf8(fragFile.readAll());
+    if (rawSource.isEmpty()) {
+        qCWarning(lcEffect) << "Surface shader file is empty" << eff.fragmentShaderPath;
+        m_borderShaderCompileFailed = true;
+        return nullptr;
+    }
+
+    // Include paths: each search path's /shared dir (resolves
+    // `#include <surface_uniforms.glsl>`), mirroring the animation compile path.
+    QStringList includePaths;
+    for (const QString& sp : m_surfaceShaderRegistry.searchPaths()) {
+        const QString sharedDir = sp + QStringLiteral("/shared");
+        if (QDir(sharedDir).exists()) {
+            includePaths.append(sharedDir);
+        }
+    }
+    const QString currentDir = QFileInfo(eff.fragmentShaderPath).absolutePath();
+    QString includeError;
+    QString expanded =
+        PhosphorShaders::ShaderIncludeResolver::expandIncludes(rawSource, currentDir, includePaths, &includeError);
+    if (expanded.isEmpty()) {
+        qCWarning(lcEffect) << "Failed to expand surface shader includes for" << eff.id << ":" << includeError;
+        m_borderShaderCompileFailed = true;
+        return nullptr;
+    }
+    // Named-param preamble (`#define p_<id> ...`) for pack-declared parameters —
+    // empty for the border pack, whose state comes from the contract uniforms.
+    expanded = PhosphorShaders::spliceAfterVersion(expanded,
+                                                   PhosphorSurfaceShaders::SurfaceShaderRegistry::paramPreamble(eff));
+    // Select the PLASMAZONES_KWIN branch of surface_uniforms.glsl (classic-GL
+    // default-block uniforms; KWin::GLShader has no UBO bind path), exactly as
+    // the animation compile path does.
+    const QByteArray fragWithKwinDefine = injectKwinDefineAfterVersion(expanded);
+
+    // Default surface vertex stage for frag-only packs (the border ships none).
+    // Passthrough texcoord, NO Y-flip: the fragment reconstructs the top-down
+    // device pixel itself for the rounded-rect SDF, so the geometry lines up
+    // with the top-down frame uniforms. Shares the attribute-slot layout
+    // (position@0, texCoord@1, modelViewProjectionMatrix) with the animation
+    // default vertex, minus its Y-flip.
+    static const QByteArray kSurfaceDefaultVertexSource = QByteArrayLiteral(
+        "#version 450\n\n"
+        "layout(location = 0) in vec2 position;\n"
+        "layout(location = 1) in vec2 texCoord;\n\n"
+        "layout(location = 0) out vec2 vTexCoord;\n\n"
+        "uniform mat4 modelViewProjectionMatrix;\n\n"
+        "void main() {\n"
+        "    vTexCoord = texCoord;\n"
+        "    gl_Position = modelViewProjectionMatrix * vec4(position, 0.0, 1.0);\n"
+        "}\n");
+    QByteArray vertWithKwinDefine = kSurfaceDefaultVertexSource;
+    if (!eff.vertexShaderPath.isEmpty()) {
+        QFile vertFile(eff.vertexShaderPath);
+        if (vertFile.open(QIODevice::ReadOnly)) {
+            const QString rawVert = QString::fromUtf8(vertFile.readAll());
+            if (!rawVert.isEmpty()) {
+                QString vertIncErr;
+                const QString expandedVert = PhosphorShaders::ShaderIncludeResolver::expandIncludes(
+                    rawVert, QFileInfo(eff.vertexShaderPath).absolutePath(), includePaths, &vertIncErr);
+                vertWithKwinDefine = injectKwinDefineAfterVersion(expandedVert.isEmpty() ? rawVert : expandedVert);
+            }
+        }
+    }
+
+    auto shader = KWin::ShaderManager::instance()->generateCustomShader(KWin::ShaderTrait::MapTexture,
+                                                                        vertWithKwinDefine, fragWithKwinDefine);
+    if (!shader || !shader->isValid()) {
+        qCWarning(lcEffect) << "Failed to compile surface shader pack" << m_surfaceShaderId
+                            << "— window decoration disabled this session";
+        m_borderShaderCompileFailed = true;
+        return nullptr;
+    }
+    // Cache the contract uniform locations. The member names predate the
+    // surface-pack refactor; each maps 1:1 to a surface contract uniform.
+    namespace SC = PhosphorSurfaceShaders::SurfaceShaderContract;
+    m_borderUWindowExpandedSizeLoc = shader->uniformLocation(SC::kUSurfaceSize);
+    m_borderUFrameTopLeftLoc = shader->uniformLocation(SC::kUSurfaceFrameTopLeft);
+    m_borderUFrameSizeLoc = shader->uniformLocation(SC::kUSurfaceFrameSize);
+    m_borderURadiusLoc = shader->uniformLocation(SC::kUSurfaceRadius);
+    m_borderUThicknessLoc = shader->uniformLocation(SC::kUSurfaceBorderWidth);
+    m_borderUOutlineColorLoc = shader->uniformLocation(SC::kUSurfaceColor);
+    m_borderShader = std::move(shader);
+    return m_borderShader.get();
 }
 
 } // namespace PlasmaZones

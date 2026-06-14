@@ -699,6 +699,20 @@ void SettingsAdaptor::initializeRegistry()
     REGISTER_BOOL_SETTING("snappingUseSystemBorderColors", snappingUseSystemBorderColors,
                           setSnappingUseSystemBorderColors)
 
+    // Surface shader pack selection (global). surfaceShaderEffectId is what the
+    // kwin-effect fetches over getSetting to pick which surface pack renders the
+    // decoration; without this registration getSetting returns "key not found"
+    // (empty) and the effect never leaves the default "border" pack.
+    REGISTER_STRING_SETTING("surfaceShaderEffectId", surfaceShaderEffectId, setSurfaceShaderEffectId)
+    m_getters[QStringLiteral("surfaceShaderParameters")] = [this]() {
+        return QVariant::fromValue(m_settings->surfaceShaderParameters());
+    };
+    m_setters[QStringLiteral("surfaceShaderParameters")] = [this](const QVariant& v) {
+        m_settings->setSurfaceShaderParameters(v.toMap());
+        return true;
+    };
+    m_schemas[QStringLiteral("surfaceShaderParameters")] = QStringLiteral("map");
+
     REGISTER_BOOL_SETTING("autotileFocusFollowsMouse", autotileFocusFollowsMouse, setAutotileFocusFollowsMouse)
     m_getters[QStringLiteral("autotileStickyWindowHandling")] = [this]() {
         return static_cast<int>(m_settings->autotileStickyWindowHandling());

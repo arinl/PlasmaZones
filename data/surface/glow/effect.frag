@@ -43,27 +43,32 @@ void main() {
     vec4 base = vec4(uSurfaceColor.rgb * ba, ba) + contentPx * (1.0 - ba);
 
     // ── Glow halo from the blurred surface (iChannel0) ──────────────────────
-    // The blurred surface, upright via the same sampling convention as
-    // uTexture0. Concentrate the halo in a band straddling the border: peak at
-    // the border's outer edge (d ~ 0) and falling off both inward and outward
-    // over a glow radius proportional to the border width (with a floor so a
-    // thin border still glows).
+    // The blurred surface (buffer0.frag), upright via the same sampling
+    // convention as uTexture0. This is the multipass demo's visible payload: a
+    // bold bloom that bleeds INWARD from the frame edge over a generous radius,
+    // brightening the window content near its border. Biased inward (over the
+    // content, which always exists) rather than into the off-frame margin, so it
+    // is clearly visible even on windows with no drop-shadow expansion — the
+    // unmistakable proof that the buffer pass ran and iChannel0 is sampled.
     vec4 glowSrc = texture(iChannel0, vTexCoord);
-    float glowRadius = max(uSurfaceBorderWidth * 2.0, 6.0);
-    // Triangular falloff centred on the frame edge (d == 0).
-    float halo = clamp(1.0 - abs(d) / glowRadius, 0.0, 1.0);
-    halo *= halo; // sharpen the peak
+    // Glow reach: ~12% of the shorter frame dimension, floored so small windows
+    // still bloom. -d is depth INTO the content (d < 0 inside the rounded rect).
+    float glowRadius = max(0.12 * min(uSurfaceFrameSize.x, uSurfaceFrameSize.y), 24.0);
+    float inner = clamp(1.0 - (-d) / glowRadius, 0.0, 1.0) * insideMask;
+    inner *= inner; // concentrate the bloom toward the edge
 
-    // Tint the halo toward the border colour, modulated by the blurred surface
-    // luminance so the glow carries the window's own edge content. Additive,
-    // premultiplied, and kept outside the opaque interior (1 - insideMask pushed
-    // partly back in so the band itself also glows).
-    float lum = dot(glowSrc.rgb, vec3(0.299, 0.587, 0.114));
-    float glowAmt = halo * (0.35 + 0.65 * lum) * glowSrc.a;
+    // Additive bloom: the blurred edge content, tinted halfway toward the host
+    // border colour so the glow reads as a coloured halo of the window's own
+    // content. Strong (0.8) so the effect is unmistakable vs the plain Border pack.
     vec3 glowColor = mix(glowSrc.rgb, uSurfaceColor.rgb, 0.5);
-    vec3 glowAdd = glowColor * glowAmt;
+    vec3 glowAdd = glowColor * (inner * 0.8 * glowSrc.a);
 
-    // Composite the glow additively over the base. Add to both rgb and alpha so
-    // the halo is visible over the desktop outside the window, premultiplied.
-    fragColor = vec4(base.rgb + glowAdd, min(base.a + glowAmt, 1.0));
+    // Plus a soft OUTER halo straddling the frame edge — visible where the
+    // redirected texture has off-frame margin (e.g. a server-side drop shadow).
+    float outer = clamp(1.0 - abs(d) / max(uSurfaceBorderWidth * 2.0, 8.0), 0.0, 1.0);
+    outer *= outer;
+    float outerAmt = outer * glowSrc.a * 0.6;
+
+    // Composite additively over the base, premultiplied.
+    fragColor = vec4(base.rgb + glowAdd + glowColor * outerAmt, min(base.a + outerAmt, 1.0));
 }

@@ -1,19 +1,20 @@
 // SPDX-FileCopyrightText: 2026 fuddlesworth
 // SPDX-License-Identifier: LGPL-2.1-or-later
 //
-// Glow buffer pass — box-blur the captured window surface into a downscaled
-// glow source. Sampled by effect.frag as iChannel0 to lay a soft halo in and
-// around the border band.
+// Glow buffer pass 0 — HORIZONTAL Gaussian blur of the captured window surface.
+// Separable blur: this pass blurs in X, buffer1.frag blurs the result in Y, so
+// the two cheap 1D passes produce a smooth 2D Gaussian glow source (sampled by
+// effect.frag as iChannel1). A single box blur looked blocky; a real Gaussian
+// reads as a soft, premium bloom.
 //
-// This pass sees only uTexture0 (the captured surface) — the host binds it to
-// unit 0; the per-frame surface contract uniforms (uSurfaceSize / frame rect)
-// are NOT pushed to buffer passes, so the blur uses a fixed UV-space step
-// rather than a pixel step. The pass renders at bufferScale (0.5) so the step
-// already covers ~2 surface texels per buffer texel — a cheap, soft blur.
+// This pass sees only uTexture0 (the captured surface, bound to unit 0 by the
+// host). The per-frame surface geometry uniforms are NOT pushed to buffer
+// passes, so the tap spacing is a fixed UV step (resolution-independent: the
+// glow stays a consistent fraction of the window). The pass renders at
+// bufferScale, so its own downsample adds to the softening.
 //
-// Output is the blurred surface, premultiplied (surfaceTexel returns
-// premultiplied alpha from the compositor's redirected FBO), so effect.frag can
-// composite it directly.
+// Output is premultiplied (surfaceTexel returns premultiplied alpha), so the
+// downstream passes composite it directly.
 
 #version 450
 #include <surface_uniforms.glsl>
@@ -22,22 +23,14 @@ layout(location = 0) in vec2 vTexCoord;
 layout(location = 0) out vec4 fragColor;
 
 void main() {
-    // Fixed UV step (no uSurfaceSize available in a buffer pass). A 9-tap
-    // separable-style box blur over a small neighbourhood; the downscaled
-    // buffer resolution does most of the softening, this widens the halo.
-    const float step = 1.0 / 256.0;
-
+    const float sigma = 2.6;
+    const float stepUV = 1.7 / 256.0; // horizontal tap spacing in UV
     vec4 acc = vec4(0.0);
     float wsum = 0.0;
-    for (int dy = -2; dy <= 2; ++dy) {
-        for (int dx = -2; dx <= 2; ++dx) {
-            vec2 uv = vTexCoord + vec2(float(dx), float(dy)) * step;
-            // Weight by inverse Chebyshev distance so the centre dominates —
-            // a soft, rounded blur kernel rather than a hard box.
-            float wgt = 1.0 / (1.0 + float(abs(dx) + abs(dy)));
-            acc += surfaceTexel(uv) * wgt;
-            wsum += wgt;
-        }
+    for (int i = -4; i <= 4; ++i) {
+        float w = exp(-float(i * i) / (2.0 * sigma * sigma));
+        acc += surfaceTexel(vTexCoord + vec2(float(i) * stepUV, 0.0)) * w;
+        wsum += w;
     }
     fragColor = acc / max(wsum, 1e-4);
 }

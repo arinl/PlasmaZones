@@ -1,16 +1,22 @@
 // SPDX-FileCopyrightText: 2026 fuddlesworth
 // SPDX-License-Identifier: LGPL-2.1-or-later
 //
-// Glow surface shader — the Border pack's rounded-corner + border clip, PLUS a
-// soft glow halo sampled from the blurred surface (iChannel0, produced by
-// buffer0.frag). A multipass demo for the compositor's surface buffer chain.
+// Glow surface shader — the Border pack's rounded-corner + border clip, plus a
+// refined edge glow built from a separable Gaussian blur of the window surface
+// (iChannel1, from buffer0.frag → buffer1.frag). A multipass demo for the
+// compositor surface buffer chain.
 //
-// The base rounded-rect SDF logic is identical to data/surface/border: one
-// analytic SDF over the frame rect clips the content to the inner rounded rect
-// and lays the border band over the background. On top of that, the blurred
-// surface (iChannel0) is added as a halo concentrated in and just outside the
-// border band, tinted by the host border colour — so the window appears to glow
-// with its own content's colour along the edge. Static (no iTime).
+// Three composited layers make it read as a designed light rather than a flat
+// brighten:
+//   • Inner glow — the blurred edge content, accent-tinted, SCREEN-blended into
+//     the content near the border with an exponential falloff. Screen blend
+//     lifts the edges without blowing bright windows out to white.
+//   • Outer glow — a soft halo bleeding outward into any off-frame margin (the
+//     drop-shadow region), additive premultiplied, exponential falloff. Shows on
+//     windows whose redirected texture has shadow expansion.
+//   • Rim highlight — a thin near-white accent line hugging the rounded edge for
+//     a glass-edge feel.
+// Reach scales with window size so the look is consistent. Static (no iTime).
 
 #version 450
 #include <surface_uniforms.glsl>
@@ -21,14 +27,11 @@ layout(location = 0) out vec4 fragColor;
 void main() {
     vec4 tex = surfaceTexel(vTexCoord);
 
-    // Fragment's top-down device pixel within the surface texture; the content
-    // rect sits at uSurfaceFrameTopLeft..+uSurfaceFrameSize.
+    // Rounded-rect SDF over the frame (same as the Border pack); d < 0 inside.
     vec2 p = surfacePixel(vTexCoord);
     vec2 halfSz = 0.5 * uSurfaceFrameSize;
     vec2 cen = uSurfaceFrameTopLeft + halfSz;
     float r = clamp(uSurfaceRadius, 0.0, min(halfSz.x, halfSz.y));
-
-    // Analytic rounded-rect SDF over the frame (Inigo-Quilez); < 0 inside.
     vec2 q = abs(p - cen) - halfSz + r;
     float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
 
@@ -36,39 +39,42 @@ void main() {
     float insideMask = 1.0 - smoothstep(-aa, aa, d);
     float edge = smoothstep(-uSurfaceBorderWidth - aa, -uSurfaceBorderWidth + aa, d);
 
-    // Base border composite (same as the Border pack): content clipped to the
-    // inner rounded rect, border band laid over transparency, premultiplied.
+    // Base border composite: content clipped to the inner rounded rect, border
+    // band laid over transparency, premultiplied.
     float ba = edge * insideMask * uSurfaceColor.a;
     vec4 contentPx = tex * (1.0 - edge);
     vec4 base = vec4(uSurfaceColor.rgb * ba, ba) + contentPx * (1.0 - ba);
 
-    // ── Glow halo from the blurred surface (iChannel0) ──────────────────────
-    // The blurred surface (buffer0.frag), upright via the same sampling
-    // convention as uTexture0. This is the multipass demo's visible payload: a
-    // bold bloom that bleeds INWARD from the frame edge over a generous radius,
-    // brightening the window content near its border. Biased inward (over the
-    // content, which always exists) rather than into the off-frame margin, so it
-    // is clearly visible even on windows with no drop-shadow expansion — the
-    // unmistakable proof that the buffer pass ran and iChannel0 is sampled.
-    vec4 glowSrc = texture(iChannel0, vTexCoord);
-    // Glow reach: ~12% of the shorter frame dimension, floored so small windows
-    // still bloom. -d is depth INTO the content (d < 0 inside the rounded rect).
-    float glowRadius = max(0.12 * min(uSurfaceFrameSize.x, uSurfaceFrameSize.y), 24.0);
-    float inner = clamp(1.0 - (-d) / glowRadius, 0.0, 1.0) * insideMask;
-    inner *= inner; // concentrate the bloom toward the edge
+    // Smooth Gaussian-blurred surface (separable H then V). Accent-tinted toward
+    // the host border colour so the glow reads as a designed light, not just a
+    // brighter copy of the window content.
+    vec3 blur = texture(iChannel1, vTexCoord).rgb;
+    vec3 glowTint = mix(blur, uSurfaceColor.rgb, 0.55);
 
-    // Additive bloom: the blurred edge content, tinted halfway toward the host
-    // border colour so the glow reads as a coloured halo of the window's own
-    // content. Strong (0.8) so the effect is unmistakable vs the plain Border pack.
-    vec3 glowColor = mix(glowSrc.rgb, uSurfaceColor.rgb, 0.5);
-    vec3 glowAdd = glowColor * (inner * 0.8 * glowSrc.a);
+    // Reach scales with the window (8% of the shorter side, clamped) so a small
+    // dialog and a maximised window glow proportionally the same.
+    float minDim = max(min(uSurfaceFrameSize.x, uSurfaceFrameSize.y), 1.0);
+    float reach = clamp(0.08 * minDim, 16.0, 96.0);
 
-    // Plus a soft OUTER halo straddling the frame edge — visible where the
-    // redirected texture has off-frame margin (e.g. a server-side drop shadow).
-    float outer = clamp(1.0 - abs(d) / max(uSurfaceBorderWidth * 2.0, 8.0), 0.0, 1.0);
-    outer *= outer;
-    float outerAmt = outer * glowSrc.a * 0.6;
+    // ── Inner glow (screen-blended, over the content) ───────────────────────
+    float depthIn = max(-d, 0.0); // distance inward from the frame edge
+    float inner = exp(-depthIn / (reach * 0.5)) * insideMask;
+    vec3 innerGlow = glowTint * (inner * 0.85);
+    vec3 lit = 1.0 - (1.0 - clamp(base.rgb, 0.0, 1.0)) * (1.0 - clamp(innerGlow, 0.0, 1.0));
+    base.rgb = mix(base.rgb, lit, insideMask);
 
-    // Composite additively over the base, premultiplied.
-    fragColor = vec4(base.rgb + glowAdd + glowColor * outerAmt, min(base.a + outerAmt, 1.0));
+    // ── Outer glow (additive, into the off-frame margin) ────────────────────
+    float depthOut = max(d, 0.0); // distance outward (only exists where margin does)
+    float outerA = exp(-depthOut / (reach * 0.6)) * (1.0 - insideMask) * 0.7;
+    vec3 outerGlow = glowTint * outerA;
+
+    // ── Rim highlight (thin bright accent on the edge) ──────────────────────
+    float rimW = max(uSurfaceBorderWidth * 0.6, 1.5);
+    float rim = exp(-(d * d) / (2.0 * rimW * rimW));
+    vec3 rimColor = mix(uSurfaceColor.rgb, vec3(1.0), 0.35);
+    float rimA = rim * 0.5 * uSurfaceColor.a;
+
+    vec3 outRgb = base.rgb + outerGlow + rimColor * rimA;
+    float outA = clamp(base.a + outerA + rimA, 0.0, 1.0);
+    fragColor = vec4(outRgb, outA);
 }

@@ -1,12 +1,12 @@
 {
     "id": "glow",
     "name": "Glow",
-    "description": "Rounded corners and a window border with a soft glow halo. A multipass demo: buffer0.frag box-blurs the captured surface into a downscaled glow source, and effect.frag lays that blurred surface as a soft halo in and around the border band, on top of the same rounded-corner / border clip as the Border pack. Static (no time-based animation); radius, width and colour come from the host.",
+    "description": "Rounded corners and a window border with a soft edge glow. A multipass demo: buffer0.frag and buffer1.frag apply a separable Gaussian blur (horizontal then vertical) to the captured surface, and effect.frag composites it as a screen-blended inner glow, an outer halo in the shadow margin, and a crisp rim highlight on top of the same rounded-corner / border clip as the Border pack. Static (no time-based animation); radius, width and colour come from the host.",
     "author": "PlasmaZones",
     "version": "1.0",
     "category": "Decoration",
     "multipass": true,
-    "bufferShaders": ["buffer0.frag"],
+    "bufferShaders": ["buffer0.frag", "buffer1.frag"],
     "bufferScale": 0.5,
     "fragmentShader": "effect.frag",
     "parameters": []

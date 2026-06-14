@@ -1074,6 +1074,22 @@ void PlasmaZonesEffect::paintWindow(const KWin::RenderTarget& renderTarget, cons
     // (the KDE-Rounded-Corners model), which applies the shader on every
     // composite including idle frames. paintWindow only drives the animation
     // transition path above; everything else falls through unchanged.
+    //
+    // EXCEPTION — multipass surface packs: render the buffer passes HERE, before
+    // the draw-chain walk below, when the (non-transition) window has a multipass
+    // border. renderSurfaceBufferPasses captures the raw surface via
+    // effects->drawWindow; that nested draw-chain walk MUST run from paintWindow
+    // (a fresh draw-window iterator) — doing it from inside the drawWindow
+    // override re-enters KWin's iterator mid-walk and corrupts it (crash in the
+    // following OffscreenEffect::drawWindow). The override then only BINDS the
+    // per-window buffer textures this prepared. Single-pass packs (border) have
+    // m_surfaceBufferPasses empty → cheap early-out, no capture.
+    if (!m_capturingSnapshot && !m_surfaceBufferPasses.empty() && !m_shaderManager.findTransition(w)) {
+        const auto bit = m_windowBorders.constFind(getWindowId(w));
+        if (bit != m_windowBorders.constEnd() && bit->shaderApplied) {
+            renderSurfaceBufferPasses(w, viewport.scale());
+        }
+    }
 
     // Route through the draw chain (not a direct OffscreenEffect::drawWindow
     // call) so KWin's `m_currentDrawWindowIterator` is advanced past us

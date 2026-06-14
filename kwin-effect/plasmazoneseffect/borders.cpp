@@ -477,42 +477,45 @@ void PlasmaZonesEffect::drawWindow(const KWin::RenderTarget& renderTarget, const
     if (!m_capturingSnapshot && !m_windowBorders.isEmpty() && m_borderShader && !m_shaderManager.findTransition(w)) {
         const auto bit = m_windowBorders.constFind(getWindowId(w));
         if (bit != m_windowBorders.constEnd() && bit->shaderApplied) {
-            // Run buffer passes first (it re-enters the draw chain to capture the
-            // raw surface and restores the border shader as the redirect's bound
-            // program). Only a multipass pack with compiled passes does work
-            // here; otherwise this is a cheap empty-vector early-out.
-            const bool channelsReady = !m_surfaceBufferPasses.empty() && renderSurfaceBufferPasses(w, viewport.scale());
+            // Multipass buffer outputs are rendered in paintWindow
+            // (renderSurfaceBufferPasses), NOT here. That render re-enters the
+            // draw chain (effects->drawWindow) to capture the raw surface;
+            // calling it from inside THIS drawWindow override would re-enter
+            // KWin's shared draw-window iterator while it is already mid-walk,
+            // corrupting it and crashing the OffscreenEffect::drawWindow below.
+            // paintWindow runs the capture on a fresh iterator; here we only bind
+            // the ready per-window buffer textures as iChannels.
+            const auto stateIt = m_surfaceMultipass.find(getWindowId(w));
+            const bool channelsReady = !m_surfaceBufferPasses.empty() && stateIt != m_surfaceMultipass.end()
+                && !stateIt->second.bufferTex.empty();
 
             KWin::ShaderBinder binder(m_borderShader.get());
             pushBorderUniforms(w, *bit, viewport.scale());
 
             if (channelsReady) {
-                const auto stateIt = m_surfaceMultipass.find(getWindowId(w));
-                if (stateIt != m_surfaceMultipass.end()) {
-                    const SurfaceMultipassState& state = stateIt->second;
-                    const int n = qMin(static_cast<int>(state.bufferTex.size()), 4);
-                    for (int i = 0; i < n; ++i) {
-                        if (!state.bufferTex[i]) {
-                            continue;
-                        }
-                        const int unit = kSurfaceChannelBaseUnit + i;
-                        glActiveTexture(GL_TEXTURE0 + unit);
-                        state.bufferTex[i]->bind();
-                        if (m_surfaceIChannelLoc[i] >= 0) {
-                            m_borderShader->setUniform(m_surfaceIChannelLoc[i], unit);
-                        }
-                        if (m_surfaceIChannelResolutionLoc[i] >= 0) {
-                            const QVector4D res(static_cast<float>(state.bufferTex[i]->width()),
-                                                static_cast<float>(state.bufferTex[i]->height()), 0.0f, 0.0f);
-                            m_borderShader->setUniform(m_surfaceIChannelResolutionLoc[i], res);
-                        }
-                        ++boundChannels;
+                const SurfaceMultipassState& state = stateIt->second;
+                const int n = qMin(static_cast<int>(state.bufferTex.size()), 4);
+                for (int i = 0; i < n; ++i) {
+                    if (!state.bufferTex[i]) {
+                        continue;
                     }
-                    // Restore GL_TEXTURE0 as the active unit so OffscreenData::paint
-                    // (which binds the redirected surface to unit 0 without a
-                    // preceding glActiveTexture) targets the right unit.
-                    glActiveTexture(GL_TEXTURE0);
+                    const int unit = kSurfaceChannelBaseUnit + i;
+                    glActiveTexture(GL_TEXTURE0 + unit);
+                    state.bufferTex[i]->bind();
+                    if (m_surfaceIChannelLoc[i] >= 0) {
+                        m_borderShader->setUniform(m_surfaceIChannelLoc[i], unit);
+                    }
+                    if (m_surfaceIChannelResolutionLoc[i] >= 0) {
+                        const QVector4D res(static_cast<float>(state.bufferTex[i]->width()),
+                                            static_cast<float>(state.bufferTex[i]->height()), 0.0f, 0.0f);
+                        m_borderShader->setUniform(m_surfaceIChannelResolutionLoc[i], res);
+                    }
+                    ++boundChannels;
                 }
+                // Restore GL_TEXTURE0 as the active unit so OffscreenData::paint
+                // (which binds the redirected surface to unit 0 without a
+                // preceding glActiveTexture) targets the right unit.
+                glActiveTexture(GL_TEXTURE0);
             }
         }
     }

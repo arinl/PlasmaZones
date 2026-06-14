@@ -523,6 +523,12 @@ PlasmaZonesEffect::PlasmaZonesEffect()
         if (m_windowIdCache.contains(w)) {
             const QString cachedId = m_windowIdCache.take(w);
             m_windowIdReverse.remove(cachedId);
+            // Free any multipass FBO targets keyed by this window id. Normally
+            // removeWindowBorder (run from slotWindowClosed) already cleared
+            // this; the explicit erase here is defence-in-depth for a window
+            // deleted without a preceding close, keyed by the same composite id
+            // the targets were stored under.
+            m_surfaceMultipass.erase(cachedId);
             // Mirror the m_pendingFrameGeometry cleanup that
             // slotWindowClosed runs (window_lifecycle.cpp). A
             // windowFrameGeometryChanged emission between

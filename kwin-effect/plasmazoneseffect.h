@@ -38,9 +38,11 @@
 #include <QPointer>
 #include <QRect>
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include "shadertransitionmanager.h"
 
@@ -728,6 +730,20 @@ private:
     /// blits (ping-pong). Implemented in surfacelayers.cpp.
     KWin::GLTexture* renderSurfaceChain(ShaderTransition& transition, KWin::EffectWindow* w, qreal scale);
 
+    /// Render the MULTIPASS surface pack's buffer passes for @p w into its
+    /// per-window FBO chain (m_surfaceMultipass), so the IDLE drawWindow path can
+    /// bind the buffer outputs as iChannel0..3 for the main pass. Returns true
+    /// when the buffer textures are ready (the caller then binds them + sets the
+    /// main shader's m_surfaceIChannel*Loc), false otherwise (single-pass pack,
+    /// allocation failure, or collapsed surface — the caller renders single-pass,
+    /// iChannels unbound → sampled as 0). Implemented in surfacelayers.cpp.
+    ///
+    /// IDLE-path only. During a window-animation transition a multipass pack
+    /// degrades to single-pass (renderSurfaceChain runs the border via the main
+    /// shader with iChannels unbound); wiring buffer passes into the transition
+    /// chain is a follow-up.
+    bool renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal scale);
+
     /// Surface-shader pack registry (the "surface" category: window border /
     /// rounded corners today). Discovers data/surface packs; the effect compiles
     /// the selected one. Search paths populated lazily via ensureSurfaceRegistryPaths.
@@ -748,6 +764,14 @@ private:
     /// uSurfaceBorderWidth, uSurfaceColor).
     std::unique_ptr<KWin::GLShader> m_borderShader;
     bool m_borderShaderCompileFailed = false; ///< latch a failed compile so we don't retry every frame
+    /// MAIN surface shader iChannel0..3 sampler + iChannelResolution[0..3]
+    /// element locations. Filled in borderShader() where the other contract
+    /// locations are cached, and -1 when the linker dropped the uniform (a
+    /// single-pass pack never references them). The idle drawWindow path binds
+    /// the multipass buffer outputs to these so the main pass can sample the
+    /// pre-rendered buffer textures (see renderSurfaceBufferPasses).
+    std::array<int, 4> m_surfaceIChannelLoc{{-1, -1, -1, -1}};
+    std::array<int, 4> m_surfaceIChannelResolutionLoc{{-1, -1, -1, -1}};
     int m_borderUWindowExpandedSizeLoc = -1; ///< uSurfaceSize — uTexture0 extent, device px
     int m_borderUFrameTopLeftLoc = -1; ///< uSurfaceFrameTopLeft — frame top-left within the texture, device px
     int m_borderUFrameSizeLoc = -1; ///< uSurfaceFrameSize — frame size excluding shadows, device px
@@ -768,6 +792,20 @@ private:
         m_surfaceCustomParamsValues{};
     std::array<QVector4D, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors>
         m_surfaceCustomColorsValues{};
+
+    /// Compiled buffer passes for a MULTIPASS surface pack (idle drawWindow
+    /// path only). Empty for single-pass packs (the border). Populated in
+    /// borderShader() after the main shader compiles, in bufferShaderPaths
+    /// order; cleared fail-closed if any pass fails to compile (the pack then
+    /// renders single-pass). Shared by every decorated window (the per-window
+    /// FBO targets live in m_surfaceMultipass).
+    std::vector<CompiledSurfaceBufferPass> m_surfaceBufferPasses;
+
+    /// Per-window multipass FBO targets (surfaceTex + bufferTex chain). Keyed by
+    /// getWindowId(w). Allocated lazily by renderSurfaceBufferPasses, reallocated
+    /// when the window's expanded size × scale changes, and erased on window
+    /// close / border removal (removeWindowBorder) to free GPU memory.
+    std::unordered_map<QString, SurfaceMultipassState> m_surfaceMultipass;
 
     /// Resolve which mode's BorderState manages @p windowId — autotile first,
     /// then snap — or nullptr if neither draws a border for it.

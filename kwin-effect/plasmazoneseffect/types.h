@@ -4,17 +4,20 @@
 #pragma once
 
 #include <PhosphorAnimation/AnimationShaderContract.h>
+#include <PhosphorSurface/SurfaceShaderContract.h>
 
 #include <opengl/glshader.h>
 #include <opengl/gltexture.h>
 
 #include <QColor>
 #include <QRect>
+#include <QSize>
 #include <QString>
 #include <QVector4D>
 
 #include <array>
 #include <memory>
+#include <vector>
 
 namespace KWin {
 class EffectWindow;
@@ -22,6 +25,51 @@ class Item;
 }
 
 namespace PlasmaZones {
+
+/// One compiled buffer pass of a multipass SURFACE pack (the idle drawWindow
+/// path). Each buffer.frag is a fullscreen-quad fragment that samples the
+/// captured window surface (uTexture0) plus any prior buffer outputs
+/// (iChannel0..N-1) and writes into its own FBO; the main effect.frag then
+/// samples the final buffer output(s) as iChannel0..3. Compiled in
+/// borderShader() right after the main pack shader, cleared (fail-closed) if any
+/// buffer pass fails to compile so the pack degrades to single-pass. The vector
+/// of these is shared by every decorated window — the per-window FBO targets
+/// live in SurfaceMultipassState.
+struct CompiledSurfaceBufferPass
+{
+    std::unique_ptr<KWin::GLShader> shader;
+    int uTexture0Loc = -1; ///< the captured surface (bound to GL_TEXTURE0)
+    /// iChannel0..3 sampler locations — prior buffer outputs feeding this pass.
+    std::array<int, 4> iChannelLoc{{-1, -1, -1, -1}};
+    /// iChannelResolution[0..3] element locations (the .xy pixel size of each).
+    std::array<int, 4> iChannelResolutionLoc{{-1, -1, -1, -1}};
+    /// Pack-declared parameter slot locations (reuse the main pass's values).
+    std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomParams> customParamsLoc = []() {
+        std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomParams> a;
+        a.fill(-1);
+        return a;
+    }();
+    std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors> customColorsLoc = []() {
+        std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors> a;
+        a.fill(-1);
+        return a;
+    }();
+};
+
+/// Per-window FBO render targets for the multipass SURFACE buffer chain (idle
+/// drawWindow path). `surfaceTex` holds the raw captured window surface (full
+/// resolution, the multipass equivalent of uTexture0); `bufferTex[i]` holds the
+/// output of buffer pass `i` (sized at textureSize × bufferScale). All are
+/// bottom-origin GL FBOs, the SAME layout as KWin's redirected uTexture0, so a
+/// passthrough buffer (fragColor = surfaceTexel(vTexCoord)) reproduces the
+/// surface upright. Reallocated only when the window's expanded size × scale
+/// changes; erased on window close / border removal to free GPU memory.
+struct SurfaceMultipassState
+{
+    std::unique_ptr<KWin::GLTexture> surfaceTex;
+    std::vector<std::unique_ptr<KWin::GLTexture>> bufferTex;
+    QSize size; ///< full textureSize the targets were allocated for
+};
 
 /// Per-window border + rounded corners, rendered by sampling the redirected
 /// window through an offscreen MapTexture fragment shader (the KDE-Rounded-

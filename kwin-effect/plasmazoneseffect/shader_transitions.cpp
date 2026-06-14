@@ -328,6 +328,38 @@ inline void dispatchJsonSetting(QLatin1String name, const QVariant& v,
     }
 }
 
+// ── Fullscreen-quad primitive for the multipass SURFACE buffer passes ────────
+//
+// A buffer pass is an FBO→FBO blit: it samples the captured window surface
+// (uTexture0) plus any prior buffer outputs (iChannelN) and writes its own FBO.
+// There is no window quad to redirect here — the pass covers the whole target
+// FBO — so we draw a unit triangle-strip quad in NDC directly, with NO
+// modelViewProjectionMatrix (the position is already clip-space). The buffer's
+// fragment uses surface_uniforms.glsl; injectKwinDefineAfterVersion on this
+// vertex source isn't needed for the vertex stage (it declares no uniforms from
+// the header), but the define IS injected so both stages compile against the
+// same #version handling and the contract's KWin branch is selected in the frag.
+//
+// Attribute slots match KWin::VA_Position (0) / VA_TexCoord (1) per
+// <opengl/glvertexbuffer.h>'s GLVertex2DLayout: explicit layout(location=N)
+// decorations bind to those indices so vbo->setVertices(GLVertex2D{...}) feeds
+// position@0 and texcoord@1 directly.
+constexpr const char* kFullscreenQuadVertexSource =
+    "#version 450\n"
+    "layout(location = 0) in vec2 position;\n"
+    "layout(location = 1) in vec2 texCoord;\n"
+    "layout(location = 0) out vec2 vTexCoord;\n"
+    "void main() {\n"
+    "    vTexCoord = texCoord;\n"
+    "    gl_Position = vec4(position, 0.0, 1.0);\n"
+    "}\n";
+
+// NOTE: the fullscreen-quad DRAW helper (drawFullscreenQuad) lives in
+// surfacelayers.cpp, the only TU that issues buffer-pass draws. It is not
+// duplicated here (this TU only compiles the buffer-pass shaders) — under the
+// kwin-effect's Unity build two anonymous-namespace definitions of the same
+// helper would collide.
+
 } // namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1844,6 +1876,7 @@ KWin::GLShader* PlasmaZonesEffect::borderShader()
     // compile (success shader or failure latch) for the current id.
     if (m_surfaceShaderCompiledId != m_surfaceShaderId) {
         m_borderShader.reset();
+        m_surfaceBufferPasses.clear();
         m_borderShaderCompileFailed = false;
         m_surfaceShaderCompiledId = m_surfaceShaderId;
     }
@@ -1955,6 +1988,21 @@ KWin::GLShader* PlasmaZonesEffect::borderShader()
     m_borderUThicknessLoc = shader->uniformLocation(SC::kUSurfaceBorderWidth);
     m_borderUOutlineColorLoc = shader->uniformLocation(SC::kUSurfaceColor);
 
+    // MAIN-pass multipass channel locations: the buffer-pass outputs are bound
+    // here (idle drawWindow path) as iChannel0..3 so the main effect.frag can
+    // sample the pre-rendered buffer textures. -1 for a single-pass pack (the
+    // border never references these — the linker drops them). The literal
+    // element names match the surface contract declarations in
+    // surface_uniforms.glsl ("iChannel0".."iChannel3",
+    // "iChannelResolution[0]".."[3]").
+    static const std::array<const char*, 4> kIChannelNames = {{"iChannel0", "iChannel1", "iChannel2", "iChannel3"}};
+    static const std::array<const char*, 4> kIChannelResNames = {
+        {"iChannelResolution[0]", "iChannelResolution[1]", "iChannelResolution[2]", "iChannelResolution[3]"}};
+    for (int i = 0; i < 4; ++i) {
+        m_surfaceIChannelLoc[i] = shader->uniformLocation(kIChannelNames[i]);
+        m_surfaceIChannelResolutionLoc[i] = shader->uniformLocation(kIChannelResNames[i]);
+    }
+
     // Pack-declared parameters: cache the customParams/customColors element
     // locations and resolve the slot values from the pack's declared defaults.
     // float/int/bool params land in customParams[N], colours in customColors[N]
@@ -1990,6 +2038,84 @@ KWin::GLShader* PlasmaZonesEffect::borderShader()
         const QColor c = it->value<QColor>();
         if (c.isValid()) {
             m_surfaceCustomColorsValues[slot] = QVector4D(c.redF(), c.greenF(), c.blueF(), c.alphaF());
+        }
+    }
+
+    // ── Multipass buffer passes (idle drawWindow path) ──────────────────────
+    //
+    // Reset any prior compile (recompile on pack change). Only a multipass pack
+    // with declared buffers compiles passes here; single-pass packs (the border)
+    // leave m_surfaceBufferPasses empty and pay nothing — the cheap OffscreenData
+    // path in drawWindow is byte-for-byte unchanged for them. If ANY buffer pass
+    // fails to compile we clear the whole vector and warn: the pack then renders
+    // single-pass (fail closed), exactly like the daemon/animation degradation.
+    //
+    // bufferFeedback (sampling the prior frame's own buffer) is ignored in this
+    // first cut — each pass only sees uTexture0 + strictly-earlier buffer outputs.
+    m_surfaceBufferPasses.clear();
+    if (eff.isMultipass && !eff.bufferShaderPaths.isEmpty()) {
+        // The fullscreen-quad vertex stage is shared by every buffer pass; the
+        // PLASMAZONES_KWIN define is injected so it travels the same #version
+        // handling as the frag (the vertex declares no contract uniforms, but
+        // keeping both stages on the same define path avoids surprises).
+        const QByteArray bufVert = injectKwinDefineAfterVersion(QString::fromUtf8(kFullscreenQuadVertexSource));
+
+        std::vector<CompiledSurfaceBufferPass> passes;
+        passes.reserve(static_cast<size_t>(eff.bufferShaderPaths.size()));
+        bool allCompiled = true;
+        for (const QString& bufPath : eff.bufferShaderPaths) {
+            QFile bufFile(bufPath);
+            if (!bufFile.open(QIODevice::ReadOnly)) {
+                qCWarning(lcEffect) << "Failed to open surface buffer pass" << bufPath << "for pack" << eff.id;
+                allCompiled = false;
+                break;
+            }
+            const QString bufRaw = QString::fromUtf8(bufFile.readAll());
+            if (bufRaw.isEmpty()) {
+                qCWarning(lcEffect) << "Surface buffer pass is empty" << bufPath << "for pack" << eff.id;
+                allCompiled = false;
+                break;
+            }
+            QString bufIncErr;
+            QString bufExpanded = PhosphorShaders::ShaderIncludeResolver::expandIncludes(
+                bufRaw, QFileInfo(bufPath).absolutePath(), includePaths, &bufIncErr);
+            if (bufExpanded.isEmpty()) {
+                qCWarning(lcEffect) << "Failed to expand surface buffer-pass includes for" << bufPath << ":"
+                                    << bufIncErr;
+                allCompiled = false;
+                break;
+            }
+            bufExpanded = PhosphorShaders::spliceAfterVersion(
+                bufExpanded, PhosphorSurfaceShaders::SurfaceShaderRegistry::paramPreamble(eff));
+            const QByteArray bufFrag = injectKwinDefineAfterVersion(bufExpanded);
+            auto bufShader =
+                KWin::ShaderManager::instance()->generateCustomShader(KWin::ShaderTrait::MapTexture, bufVert, bufFrag);
+            if (!bufShader || !bufShader->isValid()) {
+                qCWarning(lcEffect) << "Failed to compile surface buffer pass" << bufPath << "for pack" << eff.id;
+                allCompiled = false;
+                break;
+            }
+
+            CompiledSurfaceBufferPass pass;
+            pass.uTexture0Loc = bufShader->uniformLocation(SC::kUTexture0);
+            for (int i = 0; i < 4; ++i) {
+                pass.iChannelLoc[i] = bufShader->uniformLocation(kIChannelNames[i]);
+                pass.iChannelResolutionLoc[i] = bufShader->uniformLocation(kIChannelResNames[i]);
+            }
+            for (int slot = 0; slot < SC::kMaxCustomParams; ++slot) {
+                pass.customParamsLoc[slot] = bufShader->uniformLocation(kCustomParamsElementNames[slot]);
+            }
+            for (int slot = 0; slot < SC::kMaxCustomColors; ++slot) {
+                pass.customColorsLoc[slot] = bufShader->uniformLocation(kCustomColorsElementNames[slot]);
+            }
+            pass.shader = std::move(bufShader);
+            passes.push_back(std::move(pass));
+        }
+        if (allCompiled) {
+            m_surfaceBufferPasses = std::move(passes);
+        } else {
+            qCWarning(lcEffect) << "Surface pack" << eff.id
+                                << "has a failing buffer pass — rendering single-pass (iChannels unbound)";
         }
     }
 

@@ -1954,6 +1954,45 @@ KWin::GLShader* PlasmaZonesEffect::borderShader()
     m_borderURadiusLoc = shader->uniformLocation(SC::kUSurfaceRadius);
     m_borderUThicknessLoc = shader->uniformLocation(SC::kUSurfaceBorderWidth);
     m_borderUOutlineColorLoc = shader->uniformLocation(SC::kUSurfaceColor);
+
+    // Pack-declared parameters: cache the customParams/customColors element
+    // locations and resolve the slot values from the pack's declared defaults.
+    // float/int/bool params land in customParams[N], colours in customColors[N]
+    // (the generated p_<id> preamble maps p_<id> to the right lane). No settings
+    // source yet — translateSurfaceParams with an empty override map yields the
+    // metadata defaults; the settings pass will supply user overrides. The
+    // border pack declares none, so all locations resolve to -1 and push nothing.
+    for (int slot = 0; slot < SC::kMaxCustomParams; ++slot) {
+        m_surfaceCustomParamsLoc[slot] = shader->uniformLocation(kCustomParamsElementNames[slot]);
+    }
+    for (int slot = 0; slot < SC::kMaxCustomColors; ++slot) {
+        m_surfaceCustomColorsLoc[slot] = shader->uniformLocation(kCustomColorsElementNames[slot]);
+    }
+    const QVariantMap surfaceParams = PhosphorSurfaceShaders::SurfaceShaderRegistry::translateSurfaceParams(eff, {});
+    for (int slot = 0; slot < SC::kMaxCustomParams; ++slot) {
+        auto pull = [&](char component) -> float {
+            const auto it = surfaceParams.constFind(SC::slotKey(slot, component));
+            if (it == surfaceParams.constEnd()) {
+                return 0.0f;
+            }
+            bool ok = false;
+            const float v = it->toFloat(&ok);
+            return ok ? v : 0.0f;
+        };
+        m_surfaceCustomParamsValues[slot] = QVector4D(pull('x'), pull('y'), pull('z'), pull('w'));
+    }
+    for (int slot = 0; slot < SC::kMaxCustomColors; ++slot) {
+        m_surfaceCustomColorsValues[slot] = QVector4D();
+        const auto it = surfaceParams.constFind(SC::colorKey(slot));
+        if (it == surfaceParams.constEnd()) {
+            continue;
+        }
+        const QColor c = it->value<QColor>();
+        if (c.isValid()) {
+            m_surfaceCustomColorsValues[slot] = QVector4D(c.redF(), c.greenF(), c.blueF(), c.alphaF());
+        }
+    }
+
     m_borderShader = std::move(shader);
     return m_borderShader.get();
 }

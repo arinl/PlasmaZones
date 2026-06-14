@@ -416,6 +416,21 @@ void PlasmaZonesEffect::pushBorderUniforms(KWin::EffectWindow* w, const WindowBo
     if (m_borderUOutlineColorLoc >= 0) {
         shader->setUniform(m_borderUOutlineColorLoc, outlineColor);
     }
+
+    // Pack-declared parameters (customParams / customColors). Values are the
+    // pack's defaults resolved at compile time (borderShader); the settings pass
+    // will let users override them. Only slots the shader actually references
+    // resolve to a valid location, so the border pack (no params) pushes nothing.
+    for (int slot = 0; slot < PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomParams; ++slot) {
+        if (m_surfaceCustomParamsLoc[slot] >= 0) {
+            shader->setUniform(m_surfaceCustomParamsLoc[slot], m_surfaceCustomParamsValues[slot]);
+        }
+    }
+    for (int slot = 0; slot < PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors; ++slot) {
+        if (m_surfaceCustomColorsLoc[slot] >= 0) {
+            shader->setUniform(m_surfaceCustomColorsLoc[slot], m_surfaceCustomColorsValues[slot]);
+        }
+    }
 }
 
 void PlasmaZonesEffect::drawWindow(const KWin::RenderTarget& renderTarget, const KWin::RenderViewport& viewport,

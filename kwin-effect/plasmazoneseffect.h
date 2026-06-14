@@ -16,6 +16,7 @@
 #include <PhosphorAnimation/AnimationLimits.h>
 #include <PhosphorAnimation/CurveRegistry.h>
 #include <PhosphorAnimation/ProfilePaths.h>
+#include <PhosphorSurface/SurfaceShaderContract.h>
 #include <PhosphorSurface/SurfaceShaderRegistry.h>
 
 #include <PhosphorWindowRule/RuleEvaluator.h>
@@ -753,6 +754,20 @@ private:
     int m_borderURadiusLoc = -1; ///< uSurfaceRadius — outer corner radius, device px
     int m_borderUThicknessLoc = -1; ///< uSurfaceBorderWidth — decoration band thickness, device px
     int m_borderUOutlineColorLoc = -1; ///< uSurfaceColor — resolved decoration colour (straight RGBA)
+
+    /// Pack-declared parameter uniform locations + values for the compiled
+    /// surface shader. float/int/bool params pack into customParams[N], colours
+    /// into customColors[N] (addressed by the generated p_<id> preamble). Values
+    /// are resolved at compile time from the pack's declared defaults via
+    /// SurfaceShaderRegistry::translateSurfaceParams (the settings pass will feed
+    /// user overrides). The border pack declares none, so every slot resolves to
+    /// -1 and pushes nothing. Locations are (re)filled on each compile.
+    std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomParams> m_surfaceCustomParamsLoc{};
+    std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors> m_surfaceCustomColorsLoc{};
+    std::array<QVector4D, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomParams>
+        m_surfaceCustomParamsValues{};
+    std::array<QVector4D, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors>
+        m_surfaceCustomColorsValues{};
 
     /// Resolve which mode's BorderState manages @p windowId — autotile first,
     /// then snap — or nullptr if neither draws a border for it.

@@ -22,7 +22,8 @@
  *   - the zone-overlay appearance groups are renamed from
  *     `Snapping.Appearance.*` to `Snapping.Zones.*` (key-for-key move,
  *     absent-source no-op, idempotent, coexisting with the folds above),
- *   - config.json is stamped `_version == 4`,
+ *   - config.json is stamped at the current schema version (the chain runs
+ *     past the v3→v4 step to ConfigSchemaVersion),
  *   - the conversion is idempotent (running twice is a no-op).
  *
  * windowrules.json SUPERSEDES the v3 inputs: the migration renames
@@ -301,9 +302,10 @@ private Q_SLOTS:
         const QJsonObject wr = readJson(ConfigDefaults::windowRulesFilePath());
         QCOMPARE(wr.value(QStringLiteral("_version")).toInt(), 4);
 
-        // config.json stamped v4.
+        // config.json stamped at the current schema version (the chain runs
+        // past v4 — v4→v5 seeds the decoration tree — to ConfigSchemaVersion).
         const QJsonObject cfg = readJson(ConfigDefaults::configFilePath());
-        QCOMPARE(cfg.value(QStringLiteral("_version")).toInt(), 4);
+        QCOMPARE(cfg.value(QStringLiteral("_version")).toInt(), ConfigSchemaVersion);
 
         // All four temporary stash keys are stripped from config.json.
         // The fixture's `makeV3Config()` doesn't populate the two
@@ -813,15 +815,17 @@ private Q_SLOTS:
         // have been written — that's the data-loss class the guard exists for.
         QVERIFY(!QFile::exists(corruptPath));
 
-        // config.json's chain step (migrateV3ToV4) DID run before finalize —
-        // it stamps `_version=4` and stashes any disable-list / animation-rule
-        // data. The chain step's idempotency guard then short-circuits the
-        // next attempt; the rebuild branch at finalize takes over (windowrules.json
-        // doesn't exist after quarantine, so the "already converted" probe
-        // returns false and rebuild retries from the stash). Both paths
-        // surface as a follow-up run after the user repairs the quarantine.
+        // config.json's chain ran before finalize — migrateV3ToV4 stamps
+        // `_version=4` and stashes any disable-list / animation-rule data, then
+        // the chain continues to ConfigSchemaVersion (v4→v5 seeds the
+        // decoration tree). The chain steps' idempotency guards then
+        // short-circuit the next attempt; the rebuild branch at finalize takes
+        // over (windowrules.json doesn't exist after quarantine, so the
+        // "already converted" probe returns false and rebuild retries from the
+        // stash). Both paths surface as a follow-up run after the user repairs
+        // the quarantine.
         const QJsonObject cfg = readJson(ConfigDefaults::configFilePath());
-        QCOMPARE(cfg.value(QStringLiteral("_version")).toInt(), 4);
+        QCOMPARE(cfg.value(QStringLiteral("_version")).toInt(), ConfigSchemaVersion);
     }
 
     // ─── Data-loss regression (B5): malformed assignments.json aborts ─────
@@ -2022,7 +2026,7 @@ private Q_SLOTS:
         QVERIFY(ConfigMigration::ensureJsonConfig());
 
         const QJsonObject cfg = readJson(ConfigDefaults::configFilePath());
-        QCOMPARE(cfg.value(QStringLiteral("_version")).toInt(), 4);
+        QCOMPARE(cfg.value(QStringLiteral("_version")).toInt(), ConfigSchemaVersion);
 
         const QJsonObject snapping = cfg.value(QStringLiteral("Snapping")).toObject();
 

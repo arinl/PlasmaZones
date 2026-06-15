@@ -74,6 +74,9 @@ set(phosphorsurface_public_HDRS
     include/PhosphorSurface/SurfaceShaderContract.h
     include/PhosphorSurface/SurfaceShaderEffect.h
     include/PhosphorSurface/SurfaceShaderRegistry.h
+    include/PhosphorSurface/DecorationProfile.h
+    include/PhosphorSurface/DecorationProfileTree.h
+    include/PhosphorSurface/DecorationSupportedPaths.h
 )
 
 # ===============================================================================
@@ -83,6 +86,8 @@ set(phosphorsurface_public_HDRS
 set(phosphorsurface_SRCS
     src/surfaceshadereffect.cpp
     src/surfaceshaderregistry.cpp
+    src/decorationprofile.cpp
+    src/decorationprofiletree.cpp
 )
 
 # ===============================================================================

@@ -19,6 +19,8 @@
 // PhosphorTiles::AutotileDefaults lives in PhosphorTiles — config layer delegates to it for
 // the user-facing default accessors.
 #include <PhosphorCompositor/DecorationDefaults.h>
+#include <PhosphorSurface/DecorationProfile.h>
+#include <PhosphorSurface/DecorationProfileTree.h>
 #include <PhosphorTiles/AutotileConstants.h>
 // Animation duration / stagger UI bounds — generic policy, not autotile-specific.
 #include <PhosphorAnimation/AnimationLimits.h>
@@ -818,6 +820,32 @@ public:
     static QVariantMap surfaceShaderParameters()
     {
         return {};
+    }
+
+    /// Default DecorationProfileTree — the fallback the typed
+    /// `Settings::decorationProfileTree()` returns when the Surface group holds
+    /// no `DecorationProfileTree` entry. Assembled from TODAY's per-field
+    /// defaults so a fresh config renders identically to the pre-tree
+    /// border/shader settings: a single `border` pack in the baseline chain,
+    /// border width/radius/show/hide-titlebar from DecorationDefaults, and the
+    /// active/inactive/use-system colors from the autotile border defaults.
+    /// Every field is engaged (no inherit) so the baseline is a complete,
+    /// self-contained decoration profile.
+    static ::PhosphorSurfaceShaders::DecorationProfileTree decorationProfileTree()
+    {
+        ::PhosphorSurfaceShaders::DecorationProfile baseline;
+        baseline.chain = QStringList{surfaceShaderEffectId()};
+        baseline.borderWidth = ::PhosphorCompositor::DecorationDefaults::BorderWidth;
+        baseline.borderRadius = ::PhosphorCompositor::DecorationDefaults::BorderRadius;
+        baseline.showBorder = ::PhosphorCompositor::DecorationDefaults::ShowBorder;
+        baseline.hideTitlebar = ::PhosphorCompositor::DecorationDefaults::HideTitleBars;
+        baseline.useSystemColors = autotileUseSystemBorderColors();
+        baseline.activeColor = autotileBorderColor();
+        baseline.inactiveColor = autotileInactiveBorderColor();
+
+        ::PhosphorSurfaceShaders::DecorationProfileTree tree;
+        tree.setBaseline(baseline);
+        return tree;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

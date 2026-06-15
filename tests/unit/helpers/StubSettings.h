@@ -791,6 +791,20 @@ public:
     void setShaderProfileTree(const PhosphorAnimationShaders::ShaderProfileTree&) override
     {
     }
+    PhosphorSurfaceShaders::DecorationProfileTree decorationProfileTree() const override
+    {
+        return ConfigDefaults::decorationProfileTree();
+    }
+    void setDecorationProfileTree(const PhosphorSurfaceShaders::DecorationProfileTree&) override
+    {
+    }
+    QString decorationProfileTreeJson() const override
+    {
+        return {};
+    }
+    void setDecorationProfileTreeJson(const QString&) override
+    {
+    }
 
     // Autotile decoration settings (ISettings)
     bool autotileFocusFollowsMouse() const override

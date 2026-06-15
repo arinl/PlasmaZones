@@ -48,7 +48,14 @@ namespace PlasmaZones {
 ///     freeing the Snapping.Appearance.* namespace for the new per-window
 ///     snapped-window decoration settings (snapping*). See moveGroupAtPath
 ///     in configmigration.cpp.
-inline constexpr int ConfigSchemaVersion = 4;
+/// v5: per-surface decoration tree — seeds the new
+///     Surface.DecorationProfileTree JSON blob from the user's existing
+///     border/shader settings (Tiling.Appearance.{Borders,Colors,Decorations}
+///     + Surface.ShaderEffectId) so current customisations carry over. Only
+///     writes the tree when the user had non-default values; the old autotile/
+///     snapping border keys are left in place (the kwin-effect still reads them
+///     until a later stage — this migration COPIES into the new tree).
+inline constexpr int ConfigSchemaVersion = 5;
 
 class PLASMAZONES_EXPORT ConfigMigration
 {
@@ -122,6 +129,25 @@ public:
     /// no stash entries (the finalizer treats an absent key as a no-op for
     /// that input). Stamps `_version = 4`.
     static void migrateV3ToV4(QJsonObject& root);
+
+    /// v4 → v5 schema step. Seeds the new `Surface.DecorationProfileTree` JSON
+    /// blob from the user's EXISTING border/shader settings so current
+    /// customisations are preserved across the schema bump:
+    ///   - reads the autotile border settings
+    ///     (Tiling.Appearance.Borders.{Width,Radius,ShowBorder},
+    ///      Tiling.Appearance.Colors.{Active,Inactive,UseSystem},
+    ///      Tiling.Appearance.Decorations.HideTitleBars) and the
+    ///      Surface.ShaderEffectId pack id,
+    ///   - writes a DecorationProfileTree baseline JSON (chain =
+    ///     [ShaderEffectId or "border"], border fields from the autotile
+    ///     values) into Surface.DecorationProfileTree — ONLY when at least one
+    ///     of those keys is present (i.e. the user customised a value). A clean
+    ///     config that never touched these keys is left untouched, falling back
+    ///     to ConfigDefaults::decorationProfileTree() at read time.
+    /// Does NOT remove the source keys — this migration COPIES into the new
+    /// tree (the kwin-effect still reads the old keys until a later stage).
+    /// Stamps `_version = 5`.
+    static void migrateV4ToV5(QJsonObject& root);
 
     /// Post-chain finalizer for the v4 conversion. The cross-file migration
     /// (config.json + assignments.json → windowrules.json) cannot live in a

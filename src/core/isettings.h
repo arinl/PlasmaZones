@@ -20,6 +20,10 @@
 #include <QString>
 #include <QStringList>
 
+namespace PhosphorSurfaceShaders {
+class DecorationProfileTree;
+}
+
 namespace PlasmaZones {
 
 /**
@@ -214,6 +218,19 @@ public:
     virtual void setSurfaceShaderEffectId(const QString& effectId) = 0;
     virtual QVariantMap surfaceShaderParameters() const = 0;
     virtual void setSurfaceShaderParameters(const QVariantMap& parameters) = 0;
+
+    // Hierarchical per-surface decoration tree — a DecorationProfile (surface
+    // shader-pack chain + border/titlebar appearance) keyed on a dot-path
+    // surface namespace, layered alongside the global surfaceShaderEffectId
+    // above. Mirrors the animation shaderProfileTree pair (which lives on
+    // IAnimationSettings): the typed getter returns the parsed tree, the
+    // JSON-string facade routes through it for the Q_PROPERTY meta-object
+    // dirty-tracking loop. Lives on the interface so page controllers and the
+    // settings adaptor depend on ISettings, not the concrete Settings.
+    virtual PhosphorSurfaceShaders::DecorationProfileTree decorationProfileTree() const = 0;
+    virtual void setDecorationProfileTree(const PhosphorSurfaceShaders::DecorationProfileTree& tree) = 0;
+    virtual QString decorationProfileTreeJson() const = 0;
+    virtual void setDecorationProfileTreeJson(const QString& json) = 0;
 
     // Color-import helper used by SnappingZonesController. Returns
     // an empty string on success, a user-readable error message
@@ -537,6 +554,7 @@ Q_SIGNALS:
     // surfaceShaderParameters above).
     void surfaceShaderEffectIdChanged();
     void surfaceShaderParametersChanged();
+    void decorationProfileTreeChanged();
     void autotileInnerGapChanged();
     void autotileOuterGapChanged();
     void autotileUsePerSideOuterGapChanged();

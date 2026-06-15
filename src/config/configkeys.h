@@ -371,6 +371,12 @@ public:
 
     P_CONFIG_KEY(surfaceShaderEffectIdKey, "ShaderEffectId")
     P_CONFIG_KEY(surfaceShaderParametersKey, "ShaderParameters")
+    // DecorationProfileTree JSON blob — hierarchical per-surface decoration
+    // (shader-pack chain + border/titlebar appearance), layered alongside the
+    // global surface-shader pack selection above. Mirrors the animation
+    // ShaderProfileTree blob under Animations; persisted as a nested JSON
+    // object under the Surface group.
+    P_CONFIG_KEY(surfaceDecorationTreeKey, "DecorationProfileTree")
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Config Keys — Tiling.Gaps

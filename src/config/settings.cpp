@@ -1191,6 +1191,56 @@ void Settings::setShaderProfileTreeJson(const QString& json)
     setShaderProfileTree(PhosphorAnimationShaders::ShaderProfileTree::fromJson(doc.object()));
 }
 
+// ── Surface decoration tree (PhosphorConfig::Store-backed) ──────────────────
+// Persisted as one nested JSON entry under Surface/DecorationProfileTree,
+// mirroring how the animation shaderProfileTree persists under
+// Animations/ShaderProfileTree. The read-side falls back to the
+// ConfigDefaults baseline (a `border`-chain profile carrying today's border /
+// titlebar defaults) when the store holds no entry, so a fresh config renders
+// identically to the pre-tree border settings.
+
+PhosphorSurfaceShaders::DecorationProfileTree Settings::decorationProfileTree() const
+{
+    const QVariantMap map =
+        m_store->read<QVariantMap>(ConfigDefaults::surfaceGroup(), ConfigDefaults::surfaceDecorationTreeKey());
+    if (map.isEmpty())
+        return ConfigDefaults::decorationProfileTree();
+    return PhosphorSurfaceShaders::DecorationProfileTree::fromJson(QJsonObject::fromVariantMap(map));
+}
+
+void Settings::setDecorationProfileTree(const PhosphorSurfaceShaders::DecorationProfileTree& tree)
+{
+    // Value-equality compare so a same-tree write doesn't fire a spurious
+    // changed signal. Compare against the effective current tree (the
+    // ConfigDefaults baseline when the store is empty) so writing the
+    // baseline back over an empty store is correctly a no-op.
+    if (tree == decorationProfileTree())
+        return;
+    m_store->write(ConfigDefaults::surfaceGroup(), ConfigDefaults::surfaceDecorationTreeKey(),
+                   tree.toJson().toVariantMap());
+    Q_EMIT decorationProfileTreeChanged();
+    Q_EMIT settingsChanged();
+}
+
+QString Settings::decorationProfileTreeJson() const
+{
+    return QString::fromUtf8(QJsonDocument(decorationProfileTree().toJson()).toJson(QJsonDocument::Compact));
+}
+
+void Settings::setDecorationProfileTreeJson(const QString& json)
+{
+    if (json.isEmpty()) {
+        setDecorationProfileTree(ConfigDefaults::decorationProfileTree());
+        return;
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    if (!doc.isObject()) {
+        qCWarning(lcConfig) << "setDecorationProfileTreeJson: malformed JSON, ignoring";
+        return;
+    }
+    setDecorationProfileTree(PhosphorSurfaceShaders::DecorationProfileTree::fromJson(doc.object()));
+}
+
 // ── Rendering (PhosphorConfig::Store-backed) ────────────────────────────────
 // Validator (normalizeRenderingBackend in the schema) coerces unknown values
 // to a known backend, so a hand-edited "Rendering.Backend = foobar" reads

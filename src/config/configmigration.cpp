@@ -9,6 +9,8 @@
 
 #include <PhosphorAnimation/CurveRegistry.h>
 #include <PhosphorAnimation/Profile.h>
+#include <PhosphorSurface/DecorationProfile.h>
+#include <PhosphorSurface/DecorationProfileTree.h>
 #include <PhosphorConfig/MigrationRunner.h>
 #include <PhosphorConfig/Schema.h>
 #include <PhosphorWindowRule/ContextRuleBridge.h>
@@ -52,6 +54,7 @@ PhosphorConfig::Schema makeMigrationSchema()
         {1, &ConfigMigration::migrateV1ToV2},
         {2, &ConfigMigration::migrateV2ToV3},
         {3, &ConfigMigration::migrateV3ToV4},
+        {4, &ConfigMigration::migrateV4ToV5},
     };
     return s;
 }
@@ -1698,6 +1701,113 @@ void ConfigMigration::migrateV3ToV4(QJsonObject& root)
 
     // Stamp literal 4 — see migrateV1ToV2 for why this isn't ConfigSchemaVersion.
     root[ConfigKeys::versionKey()] = 4;
+}
+
+// ── Schema migration: v4 → v5 ───────────────────────────────────────────────
+// Per-surface decoration tree — seeds the new Surface.DecorationProfileTree
+// JSON blob from the user's existing border/shader settings so customisations
+// carry across the bump. COPIES into the new tree; leaves the source keys in
+// place (the kwin-effect still reads them until a later stage).
+
+void ConfigMigration::migrateV4ToV5(QJsonObject& root)
+{
+    // Defense-in-depth idempotency guard, mirroring the earlier steps: a direct
+    // caller that hands us an already-v5 doc must not re-seed (and clobber) a
+    // tree the user has since edited.
+    if (root.value(ConfigKeys::versionKey()).toInt(0) >= 5) {
+        return;
+    }
+
+    // Read the existing border/shader settings from their live v4 paths. No
+    // rename accompanies this bump — Tiling.Appearance.* and Surface.* keep the
+    // exact paths a v4 config wrote — so the live ConfigDefaults accessors ARE
+    // the frozen v4 paths here; no Legacy::v4* freeze accessors are introduced.
+    // (A future rename of these accessors must add frozen v4* copies and point
+    // this step at them, per the freeze policy documented on migrateV2ToV3.)
+    const QJsonObject surface = root.value(ConfigDefaults::surfaceGroup()).toObject();
+    const QJsonObject borders = root.value(ConfigDefaults::tilingGroup())
+                                    .toObject()
+                                    .value(QLatin1String("Appearance"))
+                                    .toObject()
+                                    .value(QLatin1String("Borders"))
+                                    .toObject();
+    const QJsonObject colors = root.value(ConfigDefaults::tilingGroup())
+                                   .toObject()
+                                   .value(QLatin1String("Appearance"))
+                                   .toObject()
+                                   .value(QLatin1String("Colors"))
+                                   .toObject();
+    const QJsonObject decorations = root.value(ConfigDefaults::tilingGroup())
+                                        .toObject()
+                                        .value(QLatin1String("Appearance"))
+                                        .toObject()
+                                        .value(QLatin1String("Decorations"))
+                                        .toObject();
+
+    // Only seed when the user actually customised at least one of the source
+    // keys. A clean config that never touched them is left untouched so it
+    // falls back to ConfigDefaults::decorationProfileTree() at read time — that
+    // accessor already encodes the same baseline this seed would produce from
+    // defaults, so writing it would only add redundant on-disk noise.
+    const bool haveShaderId = surface.contains(ConfigDefaults::surfaceShaderEffectIdKey());
+    const bool haveWidth = borders.contains(ConfigDefaults::widthKey());
+    const bool haveRadius = borders.contains(ConfigDefaults::radiusKey());
+    const bool haveShowBorder = borders.contains(ConfigDefaults::showBorderKey());
+    const bool haveActive = colors.contains(ConfigDefaults::activeKey());
+    const bool haveInactive = colors.contains(ConfigDefaults::inactiveKey());
+    const bool haveUseSystem = colors.contains(ConfigDefaults::useSystemKey());
+    const bool haveHideTitle = decorations.contains(ConfigDefaults::hideTitleBarsKey());
+
+    const bool anyCustom = haveShaderId || haveWidth || haveRadius || haveShowBorder || haveActive || haveInactive
+        || haveUseSystem || haveHideTitle;
+    if (!anyCustom) {
+        root[ConfigKeys::versionKey()] = 5;
+        return;
+    }
+
+    // Build the baseline DecorationProfile from the user's values, falling back
+    // to today's defaults for any individual key the user never set. Every
+    // field is engaged so the seeded baseline is a complete profile (matching
+    // the shape ConfigDefaults::decorationProfileTree() produces).
+    PhosphorSurfaceShaders::DecorationProfile baseline;
+
+    const QString shaderId = haveShaderId ? surface.value(ConfigDefaults::surfaceShaderEffectIdKey()).toString()
+                                          : ConfigDefaults::surfaceShaderEffectId();
+    baseline.chain = QStringList{shaderId.isEmpty() ? ConfigDefaults::surfaceShaderEffectId() : shaderId};
+
+    baseline.borderWidth =
+        haveWidth ? borders.value(ConfigDefaults::widthKey()).toInt() : ConfigDefaults::autotileBorderWidth();
+    baseline.borderRadius =
+        haveRadius ? borders.value(ConfigDefaults::radiusKey()).toInt() : ConfigDefaults::autotileBorderRadius();
+    baseline.showBorder =
+        haveShowBorder ? borders.value(ConfigDefaults::showBorderKey()).toBool() : ConfigDefaults::autotileShowBorder();
+    baseline.hideTitlebar = haveHideTitle ? decorations.value(ConfigDefaults::hideTitleBarsKey()).toBool()
+                                          : ConfigDefaults::autotileHideTitleBars();
+    baseline.useSystemColors = haveUseSystem ? colors.value(ConfigDefaults::useSystemKey()).toBool()
+                                             : ConfigDefaults::autotileUseSystemBorderColors();
+    baseline.activeColor = haveActive ? QColor(colors.value(ConfigDefaults::activeKey()).toString())
+                                      : ConfigDefaults::autotileBorderColor();
+    baseline.inactiveColor = haveInactive ? QColor(colors.value(ConfigDefaults::inactiveKey()).toString())
+                                          : ConfigDefaults::autotileInactiveBorderColor();
+
+    PhosphorSurfaceShaders::DecorationProfileTree tree;
+    tree.setBaseline(baseline);
+
+    // Write the tree into Surface.DecorationProfileTree, preserving any sibling
+    // Surface keys (ShaderEffectId / ShaderParameters) already present. Stored
+    // as a compact JSON STRING even though the live schema declares the key as
+    // a nested QVariantMap — same rationale as the v1→v2 Profile blob: a single
+    // scalar leaf keeps testSchemaCoversEveryMigrationDestinationKey from
+    // treating the nested object's fields as undeclared synthetic sub-keys. The
+    // Settings layer's Store::read<QVariantMap> legacy-string fallback parses
+    // it on first load, and the next save normalises it to a nested object.
+    QJsonObject surfaceOut = surface;
+    surfaceOut[ConfigDefaults::surfaceDecorationTreeKey()] =
+        QString::fromUtf8(QJsonDocument(tree.toJson()).toJson(QJsonDocument::Compact));
+    root[ConfigDefaults::surfaceGroup()] = surfaceOut;
+
+    // Stamp literal 5 — see migrateV1ToV2 for why this isn't ConfigSchemaVersion.
+    root[ConfigKeys::versionKey()] = 5;
 }
 
 // ── v4 finalizer: the multi-step cross-file conversion ─────────────────────

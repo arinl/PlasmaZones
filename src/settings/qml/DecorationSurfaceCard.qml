@@ -30,6 +30,10 @@ import org.kde.kirigami as Kirigami
  * Optional:
  *   - isParentNode: bool — flips the inheritance banner copy for a category
  *     node ("All windows" / "All popups").
+ *   - showTitlebarToggle: bool — exposes the "Hide title bar" control. Title
+ *     bars only make sense for WINDOWS, so only the window-subtree cards set
+ *     this true; daemon surfaces (osd / popup / overlay) leave it false and
+ *     never show the toggle.
  */
 Item {
     id: root
@@ -37,6 +41,7 @@ Item {
     required property string surfacePath
     property bool collapsible: false
     property bool isParentNode: false
+    property bool showTitlebarToggle: false
 
     readonly property var bridge: settingsController.decorationPage
 
@@ -91,6 +96,10 @@ Item {
     function _resolvedSummary() {
         var c = root._resolved && root._resolved.chain ? root._resolved.chain : [];
         var packs = c.length > 0 ? root._packNames(c).join(", ") : i18n("None");
+        // Title-bar state is only meaningful for window surfaces; daemon
+        // surfaces omit it (they never expose the toggle).
+        if (!root.showTitlebarToggle)
+            return i18n("Packs: %1", packs);
         var titlebar = (root._resolved && root._resolved.hideTitlebar === true) ? i18n("title bar hidden") : i18n("title bar shown");
         return i18n("Packs: %1 · %2", packs, titlebar);
     }
@@ -200,15 +209,22 @@ Item {
                     }
                 }
 
-                SettingsSeparator {}
+                // Title bar — WINDOW surfaces only. Daemon surfaces (osd /
+                // popup / overlay) have no title bar concept, so the host leaves
+                // showTitlebarToggle false and this whole section is omitted.
+                SettingsSeparator {
+                    visible: root.showTitlebarToggle
+                }
 
                 Label {
                     Layout.fillWidth: true
+                    visible: root.showTitlebarToggle
                     text: i18n("Title bar")
                     font.weight: Font.DemiBold
                 }
 
                 SettingsRow {
+                    visible: root.showTitlebarToggle
                     title: i18n("Hide title bar")
                     description: i18n("Remove this surface's title bar")
 

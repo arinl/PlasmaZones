@@ -824,19 +824,27 @@ public:
 
     /// Default DecorationProfileTree — the fallback the typed
     /// `Settings::decorationProfileTree()` returns when the Surface group holds
-    /// no `DecorationProfileTree` entry. Assembled from TODAY's defaults so a
-    /// fresh config renders identically to the pre-tree border/shader settings:
-    /// a single `border` pack in the baseline chain, hide-titlebar from
-    /// DecorationDefaults, and the border appearance carried as the `border`
-    /// pack's PARAMETERS (the pack reads p_borderWidth/p_cornerRadius/
-    /// p_activeColor/p_inactiveColor/p_useSystemAccent from these). Param ids
-    /// match data/surface/border/metadata.json exactly. Every field is engaged
-    /// (no inherit) so the baseline is a complete, self-contained profile.
+    /// no `DecorationProfileTree` entry.
+    ///
+    /// Borders + title-bar hiding only make sense for WINDOWS, not daemon
+    /// surfaces (osd / popup / overlay). So the BASELINE is empty/neutral (no
+    /// chain, no parameters, no hide-titlebar engaged) and the border default
+    /// lives on the `window` node instead: window.tiled/snapped/floating
+    /// inherit `window` -> border, while osd/popup/overlay inherit the empty
+    /// baseline -> no decoration by default. The `window` override carries a
+    /// single `border` pack plus its PARAMETERS (the pack reads
+    /// p_borderWidth/p_cornerRadius/p_activeColor/p_inactiveColor/
+    /// p_useSystemAccent from these); param ids match
+    /// data/surface/border/metadata.json exactly.
     static ::PhosphorSurfaceShaders::DecorationProfileTree decorationProfileTree()
     {
+        // Empty baseline: daemon surfaces inherit no window decoration.
         ::PhosphorSurfaceShaders::DecorationProfile baseline;
-        baseline.chain = QStringList{surfaceShaderEffectId()};
-        baseline.hideTitlebar = ::PhosphorCompositor::DecorationDefaults::HideTitleBars;
+
+        // Window override: the canonical border default lives here.
+        ::PhosphorSurfaceShaders::DecorationProfile window;
+        window.chain = QStringList{surfaceShaderEffectId()};
+        window.hideTitlebar = ::PhosphorCompositor::DecorationDefaults::HideTitleBars;
 
         QVariantMap borderParams;
         borderParams.insert(QStringLiteral("borderWidth"), ::PhosphorCompositor::DecorationDefaults::BorderWidth);
@@ -847,10 +855,11 @@ public:
 
         QVariantMap params;
         params.insert(surfaceShaderEffectId(), borderParams);
-        baseline.parameters = params;
+        window.parameters = params;
 
         ::PhosphorSurfaceShaders::DecorationProfileTree tree;
         tree.setBaseline(baseline);
+        tree.setOverride(QStringLiteral("window"), window);
         return tree;
     }
 

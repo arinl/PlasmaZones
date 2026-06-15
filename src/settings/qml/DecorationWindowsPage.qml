@@ -39,6 +39,8 @@ SettingsFlickable {
             surfacePath: "window"
             isParentNode: true
             collapsible: true
+            // Title bars are a window concept — exposed only on window cards.
+            showTitlebarToggle: true
         }
 
         Repeater {
@@ -50,6 +52,7 @@ SettingsFlickable {
                 Layout.fillWidth: true
                 surfacePath: modelData
                 collapsible: true
+                showTitlebarToggle: true
             }
         }
     }

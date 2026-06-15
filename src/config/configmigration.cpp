@@ -1765,23 +1765,26 @@ void ConfigMigration::migrateV4ToV5(QJsonObject& root)
         return;
     }
 
-    // Build the baseline DecorationProfile from the user's values, falling back
-    // to today's defaults for any individual key the user never set. The border
+    // Build the WINDOW DecorationProfile from the user's values, falling back
+    // to today's defaults for any individual key the user never set. Borders +
+    // title-bar hiding are WINDOW concerns (the old keys lived under
+    // Tiling.Appearance — window settings), so the migrated profile is the
+    // `window` OVERRIDE, NOT the baseline: daemon surfaces (osd/popup/overlay)
+    // inherit the empty baseline and get no window decoration. The border
     // appearance is NOT a set of decoration fields — width/radius/colours are
-    // the `border` pack's PARAMETERS, so they are seeded into
-    // parameters["border"] under the param ids the pack declares in
-    // data/surface/border/metadata.json (borderWidth, cornerRadius,
-    // useSystemAccent, activeColor, inactiveColor). Every field is engaged so
-    // the seeded baseline is a complete profile (matching the shape
-    // ConfigDefaults::decorationProfileTree() produces).
-    PhosphorSurfaceShaders::DecorationProfile baseline;
+    // the `border` pack's PARAMETERS, seeded into parameters["border"] under
+    // the param ids the pack declares in data/surface/border/metadata.json
+    // (borderWidth, cornerRadius, useSystemAccent, activeColor, inactiveColor).
+    // Every field is engaged so the seeded window profile is complete (matching
+    // the shape ConfigDefaults::decorationProfileTree() produces).
+    PhosphorSurfaceShaders::DecorationProfile window;
 
     const QString shaderId = haveShaderId ? surface.value(ConfigDefaults::surfaceShaderEffectIdKey()).toString()
                                           : ConfigDefaults::surfaceShaderEffectId();
-    baseline.chain = QStringList{shaderId.isEmpty() ? ConfigDefaults::surfaceShaderEffectId() : shaderId};
+    window.chain = QStringList{shaderId.isEmpty() ? ConfigDefaults::surfaceShaderEffectId() : shaderId};
 
-    baseline.hideTitlebar = haveHideTitle ? decorations.value(ConfigDefaults::hideTitleBarsKey()).toBool()
-                                          : ConfigDefaults::autotileHideTitleBars();
+    window.hideTitlebar = haveHideTitle ? decorations.value(ConfigDefaults::hideTitleBarsKey()).toBool()
+                                        : ConfigDefaults::autotileHideTitleBars();
 
     const int borderWidth =
         haveWidth ? borders.value(ConfigDefaults::widthKey()).toInt() : ConfigDefaults::autotileBorderWidth();
@@ -1803,10 +1806,11 @@ void ConfigMigration::migrateV4ToV5(QJsonObject& root)
 
     QVariantMap params;
     params.insert(ConfigDefaults::surfaceShaderEffectId(), borderParams);
-    baseline.parameters = params;
+    window.parameters = params;
 
+    // Empty baseline + the migrated profile under the `window` path.
     PhosphorSurfaceShaders::DecorationProfileTree tree;
-    tree.setBaseline(baseline);
+    tree.setOverride(QStringLiteral("window"), window);
 
     // Write the tree into Surface.DecorationProfileTree, preserving any sibling
     // Surface keys (ShaderEffectId / ShaderParameters) already present. Stored

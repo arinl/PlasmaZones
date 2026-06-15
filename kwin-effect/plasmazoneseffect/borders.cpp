@@ -326,21 +326,26 @@ QString PlasmaZonesEffect::resolveSurfacePathFor(const QString& windowId) const
 
 void PlasmaZonesEffect::seedDecorationTreeBaseline()
 {
-    // Build a baseline mirroring the daemon's ConfigDefaults::decorationProfileTree()
-    // in the NEW shape: a single "border" pack in the chain, the shared
-    // DecorationDefaults hide-titlebar constant, and the border APPEARANCE carried
-    // as the "border" pack's PARAMETERS (not host decoration fields) so the
-    // effect's pre-fetch rendering can't drift from what the daemon would persist.
-    // Border width / corner radius come from the SHARED DecorationDefaults; the
-    // active/inactive colours seed the border pack's own metadata defaults as
-    // #AARRGGBB. The daemon's real fetch overwrites this whole tree (with the
-    // system-resolved colours when useSystemAccent is on), exactly as the old
-    // pre-fetch baseline was overwritten before the async load landed; live
-    // system-accent resolution is a follow-up — useSystemAccent stays a declared
-    // param consumed later, not resolved here.
-    PhosphorSurfaceShaders::DecorationProfile baseline;
-    baseline.chain = QStringList{QStringLiteral("border")};
-    baseline.hideTitlebar = PhosphorCompositor::DecorationDefaults::HideTitleBars;
+    // Mirror the daemon's ConfigDefaults::decorationProfileTree() in the NEW
+    // shape: borders + title-bar hiding are WINDOW-only, so the BASELINE is
+    // empty/neutral (daemon surfaces inherit no decoration) and the border
+    // default lives on the "window" node. A single "border" pack in the window
+    // chain, the shared DecorationDefaults hide-titlebar constant, and the
+    // border APPEARANCE carried as the "border" pack's PARAMETERS (not host
+    // decoration fields) so the effect's pre-fetch rendering can't drift from
+    // what the daemon would persist. Border width / corner radius come from the
+    // SHARED DecorationDefaults; the active/inactive colours seed the border
+    // pack's own metadata defaults as #AARRGGBB. The daemon's real fetch
+    // overwrites this whole tree (with the system-resolved colours when
+    // useSystemAccent is on), exactly as the old pre-fetch tree was overwritten
+    // before the async load landed; live system-accent resolution is a
+    // follow-up — useSystemAccent stays a declared param consumed later, not
+    // resolved here.
+    PhosphorSurfaceShaders::DecorationProfile baseline; // empty/neutral
+
+    PhosphorSurfaceShaders::DecorationProfile window;
+    window.chain = QStringList{QStringLiteral("border")};
+    window.hideTitlebar = PhosphorCompositor::DecorationDefaults::HideTitleBars;
 
     QVariantMap borderParams;
     borderParams.insert(QStringLiteral("borderWidth"), PhosphorCompositor::DecorationDefaults::BorderWidth);
@@ -351,10 +356,11 @@ void PlasmaZonesEffect::seedDecorationTreeBaseline()
 
     QVariantMap params;
     params.insert(QStringLiteral("border"), borderParams);
-    baseline.parameters = params;
+    window.parameters = params;
 
     PhosphorSurfaceShaders::DecorationProfileTree tree;
     tree.setBaseline(baseline);
+    tree.setOverride(QStringLiteral("window"), window);
     m_decorationTree = std::move(tree);
 }
 

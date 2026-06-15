@@ -18,7 +18,10 @@ import org.kde.kirigami as Kirigami
  *     expanding the pack in the chain (same as any other pack's params).
  *     There is no separate "border appearance" block: a surface shows a
  *     border iff "border" is in its chain.
- *   - a single "Hide title bar" toggle (the one non-shader decoration field).
+ *
+ * Note: there is NO hide-title-bar control here. Title bars are a WINDOW
+ * concept, not a global-baseline one (daemon surfaces have none), so that
+ * toggle lives only on the Windows surface cards (DecorationWindowsPage).
  *
  * Reactive-latch pattern: imperative refresh from the controller on
  * `profilesChanged` / `shaderEffectsChanged`, NOT function bindings that
@@ -36,16 +39,12 @@ SettingsFlickable {
     property var _effects: []
     property var _chain: []
     property var _params: ({})
-    // The fully-resolved baseline (defaults filled in) drives the title-bar
-    // toggle so it always shows a concrete value.
-    property var _resolved: ({})
 
     function refresh() {
         page._effects = page.bridge ? page.bridge.availableShaderEffects() : [];
         page._chain = page.bridge ? page.bridge.chainAt(page.surfacePath) : [];
         var raw = page.bridge ? page.bridge.rawProfile(page.surfacePath) : ({});
         page._params = (raw && raw.parameters) ? raw.parameters : ({});
-        page._resolved = page.bridge ? page.bridge.resolvedProfile(page.surfacePath) : ({});
     }
 
     Component.onCompleted: page.refresh()
@@ -112,31 +111,6 @@ SettingsFlickable {
                     text: i18n("No decoration shader packs are installed.")
                     wrapMode: Text.WordWrap
                     opacity: 0.7
-                }
-            }
-        }
-
-        // ── Title bar ────────────────────────────────────────────────────
-        SettingsCard {
-            Layout.fillWidth: true
-            headerText: i18n("Title bar")
-            collapsible: true
-
-            contentItem: ColumnLayout {
-                spacing: Kirigami.Units.smallSpacing
-
-                SettingsRow {
-                    title: i18n("Hide title bars")
-                    description: i18n("Remove window title bars while decorated, restored when floating")
-
-                    SettingsSwitch {
-                        checked: page._resolved && page._resolved.hideTitlebar === true
-                        accessibleName: i18n("Hide title bars on decorated windows")
-                        onToggled: function (newValue) {
-                            if (page.bridge)
-                                page.bridge.setHideTitlebar(page.surfacePath, newValue);
-                        }
-                    }
                 }
             }
         }

@@ -72,6 +72,7 @@ set_property(DIRECTORY APPEND PROPERTY COMPILE_OPTIONS "-Wno-missing-include-dir
 
 set(phosphorsurface_public_HDRS
     include/PhosphorSurface/SurfaceShaderContract.h
+    include/PhosphorSurface/SurfaceShaderUniforms.h
     include/PhosphorSurface/SurfaceShaderEffect.h
     include/PhosphorSurface/SurfaceShaderRegistry.h
     include/PhosphorSurface/DecorationProfile.h
@@ -88,6 +89,7 @@ set(phosphorsurface_SRCS
     src/surfaceshaderregistry.cpp
     src/decorationprofile.cpp
     src/decorationprofiletree.cpp
+    src/surface_contract_pins.cpp
 )
 
 # ===============================================================================

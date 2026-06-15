@@ -935,6 +935,19 @@ bool PlasmaZonesEffect::beginShaderTransition(KWin::EffectWindow* window,
     transition.surfaceExtent =
         (eff.fboExtentKind == PhosphorAnimationShaders::AnimationShaderEffect::FboExtentKind::Surface);
 
+    // Freeze whether this window owns an APPLIED resting border right now. Only
+    // then does renderSurfaceChain composite the surface layer under the
+    // animation. A freshly-opened window has no border (or one created
+    // mid-animation by the focus-refresh updateAllBorders, with shaderApplied
+    // still false) at this point, so its open animation plays on the live
+    // surface; a window that already owned its border keeps it composited for
+    // the whole transition. Captured here (not read live in renderSurfaceChain)
+    // so a mid-animation border refresh can't flip the decision frame-to-frame.
+    {
+        const auto borderIt = m_windowBorders.constFind(getWindowId(window));
+        transition.surfaceLayerActive = (borderIt != m_windowBorders.constEnd() && borderIt->shaderApplied);
+    }
+
     // Translate the friendly parameter map (e.g. {"direction": 1,
     // "parallax": 0.2}) to slot keys, then pack each
     // `customParams<N>_<x|y|z|w>` set into a vec4 we can blast in one

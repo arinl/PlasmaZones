@@ -90,9 +90,18 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChain(ShaderTransition& transit
     // a WindowBorder entry IS the gate now: updateWindowBorder only inserts one
     // for a member window whose resolved profile declares a non-empty pack chain
     // (border appearance is the pack's own params, not a host width/colour here).
+    // Composite the surface layer ONLY when the window owned an APPLIED border
+    // when this transition began (transition.surfaceLayerActive, frozen in
+    // beginShaderTransition). A window decorated MID-transition — e.g. a fresh
+    // window the focus-refresh updateAllBorders borders while its open animation
+    // runs — has an entry but was NOT bordered at begin, so engaging here would
+    // force the open animation to sample this static surface-layer FBO instead of
+    // the live redirected surface and the animation would not play. The entry
+    // must also still exist (it carries basePackId for compiledPackForWindow and
+    // may have been removed mid-animation, e.g. a move off-desktop).
     const QString windowId = getWindowId(w);
     const auto bit = m_windowBorders.constFind(windowId);
-    const bool wantsBorder = bit != m_windowBorders.constEnd();
+    const bool wantsBorder = transition.surfaceLayerActive && bit != m_windowBorders.constEnd();
     if (!wantsBorder) {
         return nullptr;
     }

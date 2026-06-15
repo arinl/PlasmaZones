@@ -152,6 +152,22 @@ void DecorationPageController::setChain(const QString& path, const QStringList& 
     DecorationProfileTree tree = readTree(m_settings);
     DecorationProfile profile = directProfileAt(tree, path);
     profile.chain = chain;
+    // Drop per-pack parameter overrides for any pack no longer in the chain, so
+    // removing a pack discards its settings — re-adding it later starts from the
+    // pack's defaults rather than resurrecting the old overrides. Only the
+    // DIRECT overrides at this path are pruned (the engaged optional); an
+    // inherited (nullopt) parameters map is left untouched. Reorder keeps every
+    // pack, so nothing is pruned then.
+    if (profile.parameters) {
+        QVariantMap params = *profile.parameters;
+        for (auto it = params.begin(); it != params.end();) {
+            if (!chain.contains(it.key()))
+                it = params.erase(it);
+            else
+                ++it;
+        }
+        profile.parameters = params;
+    }
     writeDirectProfile(m_settings, tree, path, profile);
 }
 

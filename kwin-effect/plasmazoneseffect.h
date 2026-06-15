@@ -787,6 +787,19 @@ private:
     int m_surfacePresentFinalLoc = -1; ///< uFinal sampler location on the present shader
     bool m_surfacePresentFailed = false; ///< latch a failed present-shader compile
 
+    /// Continuous seconds for the surface contract's `iTime`, relative to an
+    /// epoch captured at first use (so the value starts near 0 and keeps float
+    /// precision over a long session). Monotonic (steady_clock). Pushed to every
+    /// pass whose shader references iTime.
+    float surfaceShaderTimeSeconds();
+    qint64 m_surfaceTimeEpochMs = -1; ///< steady-clock ms captured on the first iTime push
+
+    /// True when ANY pack in @p windowId's resolved chain references iTime (main
+    /// or a buffer pass). Such a window is driven to repaint every frame by
+    /// postPaintScreen so its animation advances even with no content damage; a
+    /// purely static decoration (e.g. border-only) returns false and costs nothing.
+    bool windowSurfaceAnimates(const QString& windowId);
+
     /// Surface-shader pack registry (the "surface" category: window border /
     /// rounded corners / glow / …). Discovers data/surface packs; the effect
     /// compiles each pack a resolved decoration chain references. Search paths

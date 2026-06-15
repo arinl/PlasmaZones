@@ -1986,6 +1986,9 @@ CompiledSurfacePack* PlasmaZonesEffect::compiledPack(const QString& packId,
     packState.uFrameSizeLoc = shader->uniformLocation(SC::kUSurfaceFrameSize);
     packState.uScaleLoc = shader->uniformLocation(SC::kUSurfaceScale);
     packState.uFocusedLoc = shader->uniformLocation(SC::kUSurfaceFocused);
+    // iTime — present (>= 0) only when the pack's main references it; that is the
+    // signal the window must be driven to repaint continuously (windowSurfaceAnimates).
+    packState.uTimeLoc = shader->uniformLocation(SC::kITime);
     // uTexture0 sampler — only consulted on the multi-pack composite path, which
     // runs the main pass as a fullscreen FBO pass and binds the running composite
     // to unit 0 itself. -1 on a single-pass border-only pack would be unusual
@@ -2105,6 +2108,7 @@ CompiledSurfacePack* PlasmaZonesEffect::compiledPack(const QString& packId,
 
             CompiledSurfaceBufferPass pass;
             pass.uTexture0Loc = bufShader->uniformLocation(SC::kUTexture0);
+            pass.uTimeLoc = bufShader->uniformLocation(SC::kITime);
             for (int i = 0; i < 4; ++i) {
                 pass.iChannelLoc[i] = bufShader->uniformLocation(kIChannelNames[i]);
                 pass.iChannelResolutionLoc[i] = bufShader->uniformLocation(kIChannelResNames[i]);

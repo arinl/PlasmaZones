@@ -58,6 +58,13 @@ uniform float uSurfaceScale;
 // colour params mixes them on this rather than the host picking one.
 uniform float uSurfaceFocused;
 
+// Continuously-increasing seconds, for ANIMATED packs (pulsing glow, shimmer,
+// …) — the same role iTime plays in the overlay / animation categories. The
+// host captures an epoch at first use so this begins near 0 (float precision).
+// The linker drops it for a static pack (e.g. the border); a window whose packs
+// never reference iTime is not driven to repaint, so static decoration is free.
+uniform float iTime;
+
 // Pack-specific tweakable parameters (declared in metadata.json, addressed by
 // `#define p_<id> customParamsN_x` / `customColorN` preambles the registry
 // generates — identical to the animation/overlay categories).
@@ -88,7 +95,7 @@ layout(std140, binding = 0) uniform SurfaceUniforms {
     float qt_Opacity;            // offset 64  (4)
     float uSurfaceScale;         // offset 68  (4)
     float uSurfaceFocused;       // offset 72  (4)
-    // implicit 4-byte std140 pad (76 → 80) before the vec2 pair
+    float iTime;                 // offset 76  (4) — fills the former std140 pad
     vec2 uSurfaceSize;           // offset 80  (8)
     vec2 uSurfaceFrameTopLeft;   // offset 88  (8)
     vec2 uSurfaceFrameSize;      // offset 96  (8)

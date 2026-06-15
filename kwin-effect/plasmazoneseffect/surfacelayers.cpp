@@ -3,6 +3,7 @@
 
 #include "../plasmazoneseffect.h"
 
+#include "shader_internal.h"
 #include "types.h"
 #include "window_query.h"
 
@@ -343,6 +344,9 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
             if (pass.uTexture0Loc >= 0) {
                 pass.shader->setUniform(pass.uTexture0Loc, 0);
             }
+            if (pass.uTimeLoc >= 0) {
+                pass.shader->setUniform(pass.uTimeLoc, surfaceShaderTimeSeconds());
+            }
 
             // iChannel0..(i-1) — prior buffer outputs on units 1+j.
             for (size_t j = 0; j < i && j < 4; ++j) {
@@ -577,6 +581,9 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChainComposite(KWin::EffectWind
                 if (pass.uTexture0Loc >= 0) {
                     pass.shader->setUniform(pass.uTexture0Loc, 0);
                 }
+                if (pass.uTimeLoc >= 0) {
+                    pass.shader->setUniform(pass.uTimeLoc, surfaceShaderTimeSeconds());
+                }
                 for (size_t j = 0; j < i && j < 4; ++j) {
                     glActiveTexture(GL_TEXTURE1 + static_cast<int>(j));
                     bufs[j]->bind();
@@ -658,6 +665,48 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChainComposite(KWin::EffectWind
 
     state.finalSlot = src;
     return state.compositeTex[src].get();
+}
+
+// Continuous seconds for the surface `iTime` uniform, relative to an epoch
+// captured on first use so the value starts near 0 (a steady_clock value since
+// boot is large enough to lose visible sub-frame precision as a float).
+float PlasmaZonesEffect::surfaceShaderTimeSeconds()
+{
+    const qint64 nowMs = ShaderInternal::shaderClockNowMs();
+    if (m_surfaceTimeEpochMs < 0) {
+        m_surfaceTimeEpochMs = nowMs;
+    }
+    return static_cast<float>(static_cast<double>(nowMs - m_surfaceTimeEpochMs) / 1000.0);
+}
+
+// True when any pack in the window's resolved chain references iTime (main or a
+// buffer pass) — i.e. the decoration animates and must be driven to repaint.
+// Uses the per-pack compiled cache (a hit after the first paint compiled it), so
+// this is a few hash lookups per call. A window whose packs are not yet compiled
+// (or all static) returns false; the first content paint compiles them and the
+// next postPaintScreen picks the animation up.
+bool PlasmaZonesEffect::windowSurfaceAnimates(const QString& windowId)
+{
+    const auto it = m_windowBorders.constFind(windowId);
+    if (it == m_windowBorders.constEnd()) {
+        return false;
+    }
+    const PhosphorSurfaceShaders::DecorationProfile profile = m_decorationTree.resolve(resolveSurfacePathFor(windowId));
+    for (const QString& packId : it->chain) {
+        CompiledSurfacePack* const pack = compiledPack(packId, profile);
+        if (!pack || !pack->shader) {
+            continue;
+        }
+        if (pack->uTimeLoc >= 0) {
+            return true;
+        }
+        for (const CompiledSurfaceBufferPass& bp : pack->bufferPasses) {
+            if (bp.uTimeLoc >= 0) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 } // namespace PlasmaZones

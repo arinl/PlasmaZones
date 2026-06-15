@@ -505,6 +505,13 @@ void PlasmaZonesEffect::pushBorderUniforms(KWin::EffectWindow* w, const Compiled
         const float focused = (w == KWin::effects->activeWindow()) ? 1.0f : 0.0f;
         shader->setUniform(pack.uFocusedLoc, focused);
     }
+    // Continuous time for an animated pack. -1 (static pack, e.g. the border)
+    // pushes nothing; postPaintScreen only drives the window to repaint when a
+    // pack actually references iTime (windowSurfaceAnimates), so a static
+    // decoration neither pays this push nor forces per-frame repaints.
+    if (pack.uTimeLoc >= 0) {
+        shader->setUniform(pack.uTimeLoc, surfaceShaderTimeSeconds());
+    }
 
     // Pack-declared parameters (customParams / customColors). Values are resolved
     // at compile time from the pack's DecorationProfile overrides merged over its

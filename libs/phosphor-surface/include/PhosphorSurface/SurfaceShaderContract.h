@@ -157,6 +157,16 @@ inline constexpr const char* kUSurfaceScale = "uSurfaceScale";
 /// degrades gracefully.
 inline constexpr const char* kUSurfaceFocused = "uSurfaceFocused";
 
+/// `float iTime` — continuously-increasing seconds for ANIMATED surface
+/// packs (pulsing glow, shimmer, …), the same role iTime plays in the
+/// overlay / animation categories. The host captures an epoch at first use
+/// so the value begins near 0 (preserving float precision over a long
+/// session). Per-frame-dynamic: re-pushed every paint. The linker drops it
+/// for a static pack (e.g. the border), and the compositor only drives a
+/// window to repaint when one of its packs actually references iTime, so a
+/// static decoration costs nothing.
+inline constexpr const char* kITime = "iTime";
+
 /// `vec4 customParams[N]` — per-effect declared parameter slots.
 /// Cross-runtime element-name lookup constant: used by the kwin-effect's
 /// `glGetUniformLocation("customParams[N]")` calls and as a

@@ -224,6 +224,28 @@ void PlasmaZonesEffect::postPaintScreen()
             }
         }
     }
+    // Drive continuous repaints for windows whose surface decoration animates
+    // (a pack in the chain references iTime). Without content damage their
+    // paintWindow would not fire and iTime would stall, so damage each such
+    // window's full area every frame while the border owns the slot (idle — a
+    // live transition drives its own repaints in the loop above and the surface
+    // composite degrades to single-pass there anyway). A purely static
+    // decoration (border-only) is not matched, so this is a no-op in the common
+    // case. windowSurfaceAnimates is per-pack-cache hash lookups.
+    if (KWin::effects && !m_windowBorders.isEmpty()) {
+        for (auto it = m_windowBorders.cbegin(); it != m_windowBorders.cend(); ++it) {
+            if (!it->shaderApplied) {
+                continue;
+            }
+            KWin::EffectWindow* const sw = findWindowById(it.key());
+            if (!sw || sw->isDeleted() || !sw->isOnCurrentDesktop()) {
+                continue;
+            }
+            if (windowSurfaceAnimates(it.key())) {
+                sw->addRepaintFull();
+            }
+        }
+    }
     KWin::effects->postPaintScreen();
     // Unpin the per-frame clock. Any paintWindow() invocation outside
     // the prePaintScreen→postPaintScreen bracket (defensive bootstrap,

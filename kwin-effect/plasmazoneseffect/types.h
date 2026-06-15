@@ -40,6 +40,7 @@ struct CompiledSurfaceBufferPass
 {
     std::unique_ptr<KWin::GLShader> shader;
     int uTexture0Loc = -1; ///< the captured surface (bound to GL_TEXTURE0)
+    int uTimeLoc = -1; ///< iTime — continuous seconds (-1 for a static buffer pass)
     /// iChannel0..3 sampler locations — prior buffer outputs feeding this pass.
     std::array<int, 4> iChannelLoc{{-1, -1, -1, -1}};
     /// iChannelResolution[0..3] element locations (the .xy pixel size of each).
@@ -89,6 +90,7 @@ struct CompiledSurfacePack
     int uFrameSizeLoc = -1; ///< uSurfaceFrameSize — frame size excluding shadows, device px
     int uScaleLoc = -1; ///< uSurfaceScale — logical-to-device pixel scale
     int uFocusedLoc = -1; ///< uSurfaceFocused — 1.0 focused / 0.0 unfocused
+    int uTimeLoc = -1; ///< iTime — continuous seconds; -1 ⟺ static pack (drives the repaint gate)
     /// uTexture0 — the input-surface sampler (unit 0). On the single-pack path
     /// OffscreenData::paint binds the redirected surface to unit 0 automatically,
     /// so this is unused there; the multi-pack composite (renderSurfaceChainComposite)

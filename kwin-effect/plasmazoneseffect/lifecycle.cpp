@@ -69,6 +69,11 @@ PlasmaZonesEffect::PlasmaZonesEffect()
     // rest of the border/decoration code in borders.cpp.
     setupDecorationManager();
 
+    // Seed the decoration profile tree with today's per-field defaults so
+    // borders render correctly before the async `decorationProfileTreeJson`
+    // fetch lands (mirrors how BorderState seeds DecorationDefaults pre-load).
+    seedDecorationTreeBaseline();
+
     // Sub-pixel vertex precision. KWin's default snapping rounds quad
     // vertex positions to integer pixels before rasterising, which is
     // fine for static / pixel-aligned windows but quantises smooth
@@ -189,15 +194,13 @@ PlasmaZonesEffect::PlasmaZonesEffect()
             });
 
     // Surface shader pack hot-reload: when a data/surface pack changes on disk,
-    // drop the compiled surface shader so the next paint recompiles the selected
-    // pack against the new source, and repaint so decorated windows pick it up.
-    // The surface shader is shared (not per-transition), so there is no
-    // per-window transition cache to drain first — unlike the animation registry
-    // above. The next borderShader() call recompiles lazily.
+    // drop EVERY compiled surface pack so the next paint recompiles each
+    // referenced pack against the new source, and repaint so decorated windows
+    // pick it up. The compiled packs are shared (not per-transition), so there is
+    // no per-window transition cache to drain first — unlike the animation
+    // registry above. The next compiledPack() call recompiles lazily per pack id.
     connect(&m_surfaceShaderRegistry, &PhosphorSurfaceShaders::SurfaceShaderRegistry::effectsChanged, this, [this]() {
-        m_borderShader.reset();
-        m_surfaceShaderCompiledId.clear();
-        m_borderShaderCompileFailed = false;
+        m_compiledPacks.clear();
         if (KWin::effects) {
             KWin::effects->addRepaintFull();
         }

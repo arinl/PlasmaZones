@@ -1870,47 +1870,49 @@ void PlasmaZonesEffect::ensureSurfaceRegistryPaths()
     }
 }
 
-KWin::GLShader* PlasmaZonesEffect::borderShader()
+CompiledSurfacePack* PlasmaZonesEffect::compiledPack(const QString& packId,
+                                                     const PhosphorSurfaceShaders::DecorationProfile& profile)
 {
-    // Recompile when the selected pack id changes; otherwise reuse the cached
-    // compile (success shader or failure latch) for the current id.
-    if (m_surfaceShaderCompiledId != m_surfaceShaderId) {
-        m_borderShader.reset();
-        m_surfaceBufferPasses.clear();
-        m_borderShaderCompileFailed = false;
-        m_surfaceShaderCompiledId = m_surfaceShaderId;
-    }
-    if (m_borderShader) {
-        return m_borderShader.get();
-    }
-    if (m_borderShaderCompileFailed) {
-        return nullptr;
-    }
     if (!KWin::effects) {
         return nullptr;
     }
+    if (packId.isEmpty()) {
+        return nullptr;
+    }
+    // Per-pack-id cache: a hit returns the prior compile (success shader OR a
+    // failure latch — compileFailed true + shader null) without re-attempting the
+    // compile every frame. The whole map is cleared on a registry hot-reload
+    // (effectsChanged) so a pack edit recompiles on the next paint.
+    auto cacheIt = m_compiledPacks.find(packId);
+    if (cacheIt != m_compiledPacks.end()) {
+        return &cacheIt->second;
+    }
+
+    // Insert the cache slot up-front so every fail-closed early-return latches by
+    // leaving compileFailed=true / shader=null on the cached entry. (The single
+    // global path used member latch flags; the per-pack path latches on the slot.)
+    CompiledSurfacePack& packState = m_compiledPacks[packId];
+    packState.compileFailed = true; // pessimistic until the compile succeeds
+
     ensureSurfaceRegistryPaths();
 
-    const PhosphorSurfaceShaders::SurfaceShaderEffect eff = m_surfaceShaderRegistry.effect(m_surfaceShaderId);
+    const PhosphorSurfaceShaders::SurfaceShaderEffect eff = m_surfaceShaderRegistry.effect(packId);
     if (eff.id.isEmpty() || eff.fragmentShaderPath.isEmpty()) {
-        qCWarning(lcEffect) << "Surface shader pack" << m_surfaceShaderId << "not found in registry (effect count="
+        qCWarning(lcEffect) << "Surface shader pack" << packId << "not found in registry (effect count="
                             << m_surfaceShaderRegistry.availableEffects().size()
                             << ") — window decoration disabled this session";
-        m_borderShaderCompileFailed = true;
-        return nullptr;
+        return &packState;
     }
 
     QFile fragFile(eff.fragmentShaderPath);
     if (!fragFile.open(QIODevice::ReadOnly)) {
         qCWarning(lcEffect) << "Failed to open surface shader" << eff.fragmentShaderPath;
-        m_borderShaderCompileFailed = true;
-        return nullptr;
+        return &packState;
     }
     const QString rawSource = QString::fromUtf8(fragFile.readAll());
     if (rawSource.isEmpty()) {
         qCWarning(lcEffect) << "Surface shader file is empty" << eff.fragmentShaderPath;
-        m_borderShaderCompileFailed = true;
-        return nullptr;
+        return &packState;
     }
 
     // Include paths: each search path's /shared dir (resolves
@@ -1928,8 +1930,7 @@ KWin::GLShader* PlasmaZonesEffect::borderShader()
         PhosphorShaders::ShaderIncludeResolver::expandIncludes(rawSource, currentDir, includePaths, &includeError);
     if (expanded.isEmpty()) {
         qCWarning(lcEffect) << "Failed to expand surface shader includes for" << eff.id << ":" << includeError;
-        m_borderShaderCompileFailed = true;
-        return nullptr;
+        return &packState;
     }
     // Named-param preamble (`#define p_<id> ...`) for pack-declared parameters —
     // empty for the border pack, whose state comes from the contract uniforms.
@@ -1973,20 +1974,19 @@ KWin::GLShader* PlasmaZonesEffect::borderShader()
     auto shader = KWin::ShaderManager::instance()->generateCustomShader(KWin::ShaderTrait::MapTexture,
                                                                         vertWithKwinDefine, fragWithKwinDefine);
     if (!shader || !shader->isValid()) {
-        qCWarning(lcEffect) << "Failed to compile surface shader pack" << m_surfaceShaderId
+        qCWarning(lcEffect) << "Failed to compile surface shader pack" << packId
                             << "— window decoration disabled this session";
-        m_borderShaderCompileFailed = true;
-        return nullptr;
+        return &packState;
     }
-    // Cache the contract uniform locations. The member names predate the
-    // surface-pack refactor; each maps 1:1 to a surface contract uniform.
+    // Cache the contract uniform locations on the per-pack state. Each maps 1:1
+    // to a surface contract uniform.
     namespace SC = PhosphorSurfaceShaders::SurfaceShaderContract;
-    m_borderUWindowExpandedSizeLoc = shader->uniformLocation(SC::kUSurfaceSize);
-    m_borderUFrameTopLeftLoc = shader->uniformLocation(SC::kUSurfaceFrameTopLeft);
-    m_borderUFrameSizeLoc = shader->uniformLocation(SC::kUSurfaceFrameSize);
-    m_borderURadiusLoc = shader->uniformLocation(SC::kUSurfaceRadius);
-    m_borderUThicknessLoc = shader->uniformLocation(SC::kUSurfaceBorderWidth);
-    m_borderUOutlineColorLoc = shader->uniformLocation(SC::kUSurfaceColor);
+    packState.uSurfaceSizeLoc = shader->uniformLocation(SC::kUSurfaceSize);
+    packState.uFrameTopLeftLoc = shader->uniformLocation(SC::kUSurfaceFrameTopLeft);
+    packState.uFrameSizeLoc = shader->uniformLocation(SC::kUSurfaceFrameSize);
+    packState.uRadiusLoc = shader->uniformLocation(SC::kUSurfaceRadius);
+    packState.uBorderWidthLoc = shader->uniformLocation(SC::kUSurfaceBorderWidth);
+    packState.uColorLoc = shader->uniformLocation(SC::kUSurfaceColor);
 
     // MAIN-pass multipass channel locations: the buffer-pass outputs are bound
     // here (idle drawWindow path) as iChannel0..3 so the main effect.frag can
@@ -1999,24 +1999,27 @@ KWin::GLShader* PlasmaZonesEffect::borderShader()
     static const std::array<const char*, 4> kIChannelResNames = {
         {"iChannelResolution[0]", "iChannelResolution[1]", "iChannelResolution[2]", "iChannelResolution[3]"}};
     for (int i = 0; i < 4; ++i) {
-        m_surfaceIChannelLoc[i] = shader->uniformLocation(kIChannelNames[i]);
-        m_surfaceIChannelResolutionLoc[i] = shader->uniformLocation(kIChannelResNames[i]);
+        packState.iChannelLoc[i] = shader->uniformLocation(kIChannelNames[i]);
+        packState.iChannelResolutionLoc[i] = shader->uniformLocation(kIChannelResNames[i]);
     }
 
     // Pack-declared parameters: cache the customParams/customColors element
-    // locations and resolve the slot values from the pack's declared defaults.
-    // float/int/bool params land in customParams[N], colours in customColors[N]
-    // (the generated p_<id> preamble maps p_<id> to the right lane). No settings
-    // source yet — translateSurfaceParams with an empty override map yields the
-    // metadata defaults; the settings pass will supply user overrides. The
-    // border pack declares none, so all locations resolve to -1 and push nothing.
+    // locations and resolve the slot VALUES. float/int/bool params land in
+    // customParams[N], colours in customColors[N] (the generated p_<id> preamble
+    // maps p_<id> to the right lane). The override source is the resolved
+    // DecorationProfile's parameters[packId] merged over the pack's declared
+    // defaults via translateSurfaceParams; baked once at first compile (the cache
+    // is pack-keyed — see CompiledSurfacePack). The border pack declares none, so
+    // all locations resolve to -1 and push nothing.
     for (int slot = 0; slot < SC::kMaxCustomParams; ++slot) {
-        m_surfaceCustomParamsLoc[slot] = shader->uniformLocation(kCustomParamsElementNames[slot]);
+        packState.customParamsLoc[slot] = shader->uniformLocation(kCustomParamsElementNames[slot]);
     }
     for (int slot = 0; slot < SC::kMaxCustomColors; ++slot) {
-        m_surfaceCustomColorsLoc[slot] = shader->uniformLocation(kCustomColorsElementNames[slot]);
+        packState.customColorsLoc[slot] = shader->uniformLocation(kCustomColorsElementNames[slot]);
     }
-    const QVariantMap surfaceParams = PhosphorSurfaceShaders::SurfaceShaderRegistry::translateSurfaceParams(eff, {});
+    const QVariantMap packParamOverrides = profile.effectiveParameters().value(packId).toMap();
+    const QVariantMap surfaceParams =
+        PhosphorSurfaceShaders::SurfaceShaderRegistry::translateSurfaceParams(eff, packParamOverrides);
     for (int slot = 0; slot < SC::kMaxCustomParams; ++slot) {
         auto pull = [&](char component) -> float {
             const auto it = surfaceParams.constFind(SC::slotKey(slot, component));
@@ -2027,32 +2030,32 @@ KWin::GLShader* PlasmaZonesEffect::borderShader()
             const float v = it->toFloat(&ok);
             return ok ? v : 0.0f;
         };
-        m_surfaceCustomParamsValues[slot] = QVector4D(pull('x'), pull('y'), pull('z'), pull('w'));
+        packState.customParamsValues[slot] = QVector4D(pull('x'), pull('y'), pull('z'), pull('w'));
     }
     for (int slot = 0; slot < SC::kMaxCustomColors; ++slot) {
-        m_surfaceCustomColorsValues[slot] = QVector4D();
+        packState.customColorsValues[slot] = QVector4D();
         const auto it = surfaceParams.constFind(SC::colorKey(slot));
         if (it == surfaceParams.constEnd()) {
             continue;
         }
         const QColor c = it->value<QColor>();
         if (c.isValid()) {
-            m_surfaceCustomColorsValues[slot] = QVector4D(c.redF(), c.greenF(), c.blueF(), c.alphaF());
+            packState.customColorsValues[slot] = QVector4D(c.redF(), c.greenF(), c.blueF(), c.alphaF());
         }
     }
 
     // ── Multipass buffer passes (idle drawWindow path) ──────────────────────
     //
-    // Reset any prior compile (recompile on pack change). Only a multipass pack
-    // with declared buffers compiles passes here; single-pass packs (the border)
-    // leave m_surfaceBufferPasses empty and pay nothing — the cheap OffscreenData
-    // path in drawWindow is byte-for-byte unchanged for them. If ANY buffer pass
-    // fails to compile we clear the whole vector and warn: the pack then renders
-    // single-pass (fail closed), exactly like the daemon/animation degradation.
+    // Only a multipass pack with declared buffers compiles passes here;
+    // single-pass packs (the border) leave packState.bufferPasses empty and pay
+    // nothing — the cheap OffscreenData path in drawWindow is byte-for-byte
+    // unchanged for them. If ANY buffer pass fails to compile we leave the vector
+    // empty and warn: the pack then renders single-pass (fail closed), exactly
+    // like the daemon/animation degradation. (packState.bufferPasses starts empty
+    // for this freshly-inserted cache slot.)
     //
     // bufferFeedback (sampling the prior frame's own buffer) is ignored in this
     // first cut — each pass only sees uTexture0 + strictly-earlier buffer outputs.
-    m_surfaceBufferPasses.clear();
     if (eff.isMultipass && !eff.bufferShaderPaths.isEmpty()) {
         // The fullscreen-quad vertex stage is shared by every buffer pass; the
         // PLASMAZONES_KWIN define is injected so it travels the same #version
@@ -2112,15 +2115,33 @@ KWin::GLShader* PlasmaZonesEffect::borderShader()
             passes.push_back(std::move(pass));
         }
         if (allCompiled) {
-            m_surfaceBufferPasses = std::move(passes);
+            packState.bufferPasses = std::move(passes);
         } else {
             qCWarning(lcEffect) << "Surface pack" << eff.id
                                 << "has a failing buffer pass — rendering single-pass (iChannels unbound)";
         }
     }
 
-    m_borderShader = std::move(shader);
-    return m_borderShader.get();
+    packState.shader = std::move(shader);
+    packState.compileFailed = false; // success — clear the pessimistic latch
+    return &packState;
+}
+
+CompiledSurfacePack* PlasmaZonesEffect::compiledPackForWindow(const QString& windowId)
+{
+    const auto it = m_windowBorders.constFind(windowId);
+    if (it == m_windowBorders.constEnd()) {
+        return nullptr;
+    }
+    // Re-resolve the window's profile to feed the base pack's parameter overrides.
+    // The profile is cheap (a hash walk-up) and only matters on first compile —
+    // compiledPack bakes the param VALUES once per pack id, then returns the cache.
+    const PhosphorSurfaceShaders::DecorationProfile profile = m_decorationTree.resolve(resolveSurfacePathFor(windowId));
+    CompiledSurfacePack* const pack = compiledPack(it->basePackId, profile);
+    if (!pack || !pack->shader) {
+        return nullptr;
+    }
+    return pack;
 }
 
 } // namespace PlasmaZones

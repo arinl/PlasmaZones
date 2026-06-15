@@ -738,19 +738,37 @@ void PlasmaZonesEffect::loadCachedSettings()
         }
     });
 
-    // Global surface shader pack selection: which surface pack renders the window
-    // decoration (the border / rounded-corner pack today). Changing it swaps the
-    // compiled surface shader — borderShader() recompiles when m_surfaceShaderId
-    // differs from the last-compiled id, so resetting the cache here is enough.
-    // An empty or unknown id leaves the current pack in place (the registry
-    // lookup in borderShader() fails closed). updateAllBorders() repaints.
-    loadSettingAsync(QStringLiteral("surfaceShaderEffectId"), [this](const QVariant& v) {
-        const QString packId = v.toString();
-        if (!packId.isEmpty() && m_surfaceShaderId != packId) {
-            m_surfaceShaderId = packId;
-            m_borderShader.reset();
-            m_borderShaderCompileFailed = false;
-            updateAllBorders();
+    // Per-surface decoration profile tree (Stage 2a): the SSOT for window border
+    // appearance (width / radius / colours / showBorder) + each surface's
+    // shader-pack chain, keyed by surface path (window.tiled / window.snapped /
+    // window.floating). Supersedes the old global `surfaceShaderEffectId`
+    // selection AND the autotile/snapping border-APPEARANCE feed — updateWindowBorder
+    // now resolves appearance from this tree. The autotile/snap BorderState is
+    // still maintained (it drives MEMBERSHIP — which windows are tiled/snapped —
+    // and the daemon's retile insets), but no longer feeds appearance.
+    //
+    // On change: drop every compiled pack (a chain edit may reference a new pack,
+    // and per-pack param VALUES are baked at compile time so they must recompile)
+    // and rebuild all borders against the new tree, then repaint.
+    loadSettingAsync(QStringLiteral("decorationProfileTreeJson"), [this](const QVariant& v) {
+        const QJsonDocument doc = QJsonDocument::fromJson(v.toString().toUtf8());
+        if (!doc.isObject()) {
+            qCWarning(lcEffect) << "decorationProfileTreeJson is not a JSON object — keeping current tree";
+            return;
+        }
+        PhosphorSurfaceShaders::DecorationProfileTree tree =
+            PhosphorSurfaceShaders::DecorationProfileTree::fromJson(doc.object());
+        if (tree == m_decorationTree) {
+            return;
+        }
+        m_decorationTree = std::move(tree);
+        // Per-pack param values are baked at first compile, so a tree change that
+        // alters parameters[packId] requires a recompile of that pack — clear the
+        // whole compiled-pack cache (it lazily recompiles on the next paint).
+        m_compiledPacks.clear();
+        updateAllBorders();
+        if (KWin::effects) {
+            KWin::effects->addRepaintFull();
         }
     });
 

@@ -13,6 +13,7 @@
 #include <QRect>
 #include <QSize>
 #include <QString>
+#include <QStringList>
 #include <QVector4D>
 
 #include <array>
@@ -54,6 +55,68 @@ struct CompiledSurfaceBufferPass
         a.fill(-1);
         return a;
     }();
+};
+
+/// Compiled state for ONE surface shader pack (e.g. "border", "glow"), keyed by
+/// pack id in PlasmaZonesEffect::m_compiledPacks. Holds everything the old single
+/// borderShader() global produced for the one selected pack — the main MapTexture
+/// GLShader, its contract uniform locations, the pack-declared customParams /
+/// customColors locations + resolved-default VALUES, the main-pass iChannel
+/// locations, and the compiled multipass buffer passes — now parameterised per
+/// pack id so per-window decoration chains can each render their own base pack.
+///
+/// Compiled on first use (compiledPack), cached for the effect's lifetime, and
+/// fail-closed: a pack whose compile fails latches `compileFailed = true` and
+/// `shader == nullptr`, so subsequent lookups return it without re-attempting the
+/// compile every frame. The whole map is cleared on a SurfaceShaderRegistry
+/// hot-reload (effectsChanged) so the next paint recompiles against fresh source.
+///
+/// The param VALUES are baked at first-compile time from the DecorationProfile
+/// that triggered the compile (parameters[packId] merged over the pack's declared
+/// defaults). The cache is keyed by pack id alone, so two windows resolving the
+/// SAME pack with DIFFERENT param overrides share the first-resolved values;
+/// per-window param variance is a follow-up (the cache key would grow to
+/// pack-id + params hash). For this stage every window resolves the same baseline
+/// profile, so the shared values are correct.
+struct CompiledSurfacePack
+{
+    std::unique_ptr<KWin::GLShader> shader;
+    bool compileFailed = false; ///< latch a failed compile so we don't retry every frame
+
+    // Contract uniform locations (1:1 with PhosphorSurfaceShaders::SurfaceShaderContract).
+    int uSurfaceSizeLoc = -1; ///< uSurfaceSize — uTexture0 extent, device px
+    int uFrameTopLeftLoc = -1; ///< uSurfaceFrameTopLeft — frame top-left within the texture, device px
+    int uFrameSizeLoc = -1; ///< uSurfaceFrameSize — frame size excluding shadows, device px
+    int uRadiusLoc = -1; ///< uSurfaceRadius — outer corner radius, device px
+    int uBorderWidthLoc = -1; ///< uSurfaceBorderWidth — decoration band thickness, device px
+    int uColorLoc = -1; ///< uSurfaceColor — resolved decoration colour (straight RGBA)
+
+    /// MAIN-pass iChannel0..3 sampler + iChannelResolution[0..3] element
+    /// locations. -1 when the linker dropped the uniform (single-pass pack).
+    std::array<int, 4> iChannelLoc{{-1, -1, -1, -1}};
+    std::array<int, 4> iChannelResolutionLoc{{-1, -1, -1, -1}};
+
+    /// Pack-declared parameter uniform locations + resolved-default values.
+    /// float/int/bool params pack into customParams[N], colours into
+    /// customColors[N]. The border pack declares none, so every slot is -1.
+    std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomParams> customParamsLoc = []() {
+        std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomParams> a;
+        a.fill(-1);
+        return a;
+    }();
+    std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors> customColorsLoc = []() {
+        std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors> a;
+        a.fill(-1);
+        return a;
+    }();
+    std::array<QVector4D, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomParams> customParamsValues{};
+    std::array<QVector4D, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors> customColorsValues{};
+
+    /// Compiled multipass buffer passes (idle drawWindow path). Empty for a
+    /// single-pass pack (the border). Cleared fail-closed if any pass fails to
+    /// compile (the pack then renders single-pass). The per-window FBO targets
+    /// live in m_surfaceMultipass.
+    std::vector<CompiledSurfaceBufferPass> bufferPasses;
 };
 
 /// Per-window FBO render targets for the multipass SURFACE buffer chain (idle
@@ -108,6 +171,18 @@ struct WindowBorder
     /// the per-frame uniform push and the transition-end re-apply both consult
     /// this so the border path never fights the transition lifecycle.
     bool shaderApplied = false;
+
+    /// The resolved decoration shader-pack chain for this window
+    /// (DecorationProfile::effectiveChain()), e.g. {"border"} or {"border",
+    /// "glow"}. Stored whole this stage so the next stage can composite
+    /// chain[1..] over the base; for now ONLY chain[0] (basePackId) renders.
+    QStringList chain;
+
+    /// The base pack id to render — chain.value(0), defaulting to "border".
+    /// The render path (drawWindow / pushBorderUniforms / renderSurfaceBufferPasses)
+    /// looks this up in m_compiledPacks to get the CompiledSurfacePack instead
+    /// of the old single global border shader.
+    QString basePackId;
 };
 
 /// User-texture cache entry. Owns the uploaded `GLTexture` and tracks the wrap

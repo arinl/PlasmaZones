@@ -1083,8 +1083,11 @@ void PlasmaZonesEffect::paintWindow(const KWin::RenderTarget& renderTarget, cons
     // override re-enters KWin's iterator mid-walk and corrupts it (crash in the
     // following OffscreenEffect::drawWindow). The override then only BINDS the
     // per-window buffer textures this prepared. Single-pass packs (border) have
-    // m_surfaceBufferPasses empty → cheap early-out, no capture.
-    if (!m_capturingSnapshot && !m_surfaceBufferPasses.empty() && !m_shaderManager.findTransition(w)) {
+    // no compiled buffer passes → renderSurfaceBufferPasses cheap-early-outs (it
+    // resolves the window's base pack from the cache and returns when its
+    // bufferPasses are empty), no capture. The pre-gate here just skips windows
+    // with no applied border (no decoration at all) without a map+cache lookup.
+    if (!m_capturingSnapshot && !m_windowBorders.isEmpty() && !m_shaderManager.findTransition(w)) {
         const auto bit = m_windowBorders.constFind(getWindowId(w));
         if (bit != m_windowBorders.constEnd() && bit->shaderApplied) {
             renderSurfaceBufferPasses(w, viewport.scale());

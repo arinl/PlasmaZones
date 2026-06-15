@@ -87,11 +87,13 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChain(ShaderTransition& transit
     if (!wantsBorder) {
         return nullptr;
     }
-    // Compile-on-first-use; a latched compile failure means no surface layer.
-    KWin::GLShader* const border = borderShader();
-    if (!border) {
+    // Compile-on-first-use the window's resolved base pack; a latched compile
+    // failure (null) means no surface layer.
+    CompiledSurfacePack* const pack = compiledPackForWindow(windowId);
+    if (!pack) {
         return nullptr;
     }
+    KWin::GLShader* const border = pack->shader.get();
 
     // Size the chain to the window's expanded geometry × screen scale, exactly
     // as captureOldWindowSnapshot sizes the morph snapshot — the redirected FBO
@@ -162,7 +164,7 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChain(ShaderTransition& transit
         // uniforms persist into the draw — identical to the passive drawWindow
         // path. The binder is held across effects->drawWindow.
         KWin::ShaderBinder binder(border);
-        pushBorderUniforms(w, *bit, captureScale);
+        pushBorderUniforms(w, *pack, *bit, captureScale);
         // Route through effects->drawWindow (not OffscreenEffect::drawWindow) so
         // KWin's draw-chain iterator is advanced past us before OffscreenData's
         // internal capture re-enters the chain — same rationale as the on-screen
@@ -184,7 +186,7 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChain(ShaderTransition& transit
 // Render the MULTIPASS surface pack's buffer passes for @p w into its per-window
 // FBO chain (m_surfaceMultipass), so the IDLE drawWindow path can bind the
 // buffer outputs as iChannel0..3 for the main pass. Single-pass packs (the
-// border) have m_surfaceBufferPasses empty and never reach here — their cheap
+// border) have an empty pack->bufferPasses and never reach here — their cheap
 // OffscreenData path stays untouched.
 //
 // ORIENTATION CONTRACT: surfaceTex and every bufferTex are bottom-origin GL FBOs
@@ -203,7 +205,14 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChain(ShaderTransition& transit
 // passes into the transition chain is a follow-up.
 bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal scale)
 {
-    if (!w || m_surfaceBufferPasses.empty()) {
+    if (!w) {
+        return false;
+    }
+    // Resolve the window's base pack — its compiled buffer passes drive this idle
+    // multipass render. nullptr (compile failed/latched) or a single-pass pack
+    // (empty bufferPasses) short-circuits: the caller renders single-pass.
+    CompiledSurfacePack* const pack = compiledPackForWindow(getWindowId(w));
+    if (!pack || pack->bufferPasses.empty()) {
         return false;
     }
     namespace SC = PhosphorSurfaceShaders::SurfaceShaderContract;
@@ -227,7 +236,10 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
 
     // The pack's bufferScale downscales the buffer FBOs (the surface capture is
     // always full-resolution). Clamp matches SurfaceShaderEffect::fromJson.
-    const PhosphorSurfaceShaders::SurfaceShaderEffect eff = m_surfaceShaderRegistry.effect(m_surfaceShaderId);
+    // Resolve the pack metadata by the window's base pack id (the registry effect
+    // backing this window's compiled pack), not a single global selection.
+    const PhosphorSurfaceShaders::SurfaceShaderEffect eff =
+        m_surfaceShaderRegistry.effect(m_windowBorders.value(getWindowId(w)).basePackId);
     const qreal bufferScale = qBound(PhosphorSurfaceShaders::SurfaceShaderEffect::kMinBufferScale, eff.bufferScale,
                                      PhosphorSurfaceShaders::SurfaceShaderEffect::kMaxBufferScale);
     QSize bufferSize(qMax(1, qRound(textureSize.width() * bufferScale)),
@@ -236,7 +248,7 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
     // Get / (re)allocate the per-window targets. Reallocate the whole chain when
     // the full size changes — the buffer size is a fixed multiple of it.
     SurfaceMultipassState& state = m_surfaceMultipass[getWindowId(w)];
-    const size_t passCount = m_surfaceBufferPasses.size();
+    const size_t passCount = pack->bufferPasses.size();
     if (state.size != textureSize || !state.surfaceTex || state.bufferTex.size() != passCount) {
         state.surfaceTex = KWin::GLTexture::allocate(GL_RGBA8, textureSize);
         if (!state.surfaceTex) {
@@ -294,8 +306,8 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
         m_capturingSnapshot = false;
         // The border shader is re-applied by drawWindow's own ShaderBinder after
         // this returns; restore the redirect's bound shader to it so the main
-        // blit (OffscreenData::paint) runs the border program.
-        setShader(w, m_borderShader.get());
+        // blit (OffscreenData::paint) runs the pack's program.
+        setShader(w, pack->shader.get());
     }
 
     // ── Step 2: run each buffer pass into its FBO ────────────────────────────
@@ -304,7 +316,7 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
     // quad with NO MVP (the quad is already NDC), restoring glActiveTexture to
     // GL_TEXTURE0 after each pass for hygiene.
     for (size_t i = 0; i < passCount; ++i) {
-        const CompiledSurfaceBufferPass& pass = m_surfaceBufferPasses[i];
+        const CompiledSurfaceBufferPass& pass = pack->bufferPasses[i];
         KWin::GLTexture* const target = state.bufferTex[i].get();
         KWin::GLFramebuffer fbo(target);
         if (!fbo.valid()) {
@@ -341,12 +353,12 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
             // Pack-declared parameter values (reuse the main pass's resolved set).
             for (int slot = 0; slot < SC::kMaxCustomParams; ++slot) {
                 if (pass.customParamsLoc[slot] >= 0) {
-                    pass.shader->setUniform(pass.customParamsLoc[slot], m_surfaceCustomParamsValues[slot]);
+                    pass.shader->setUniform(pass.customParamsLoc[slot], pack->customParamsValues[slot]);
                 }
             }
             for (int slot = 0; slot < SC::kMaxCustomColors; ++slot) {
                 if (pass.customColorsLoc[slot] >= 0) {
-                    pass.shader->setUniform(pass.customColorsLoc[slot], m_surfaceCustomColorsValues[slot]);
+                    pass.shader->setUniform(pass.customColorsLoc[slot], pack->customColorsValues[slot]);
                 }
             }
 

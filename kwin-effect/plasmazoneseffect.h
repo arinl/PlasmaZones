@@ -16,6 +16,7 @@
 #include <PhosphorAnimation/AnimationLimits.h>
 #include <PhosphorAnimation/CurveRegistry.h>
 #include <PhosphorAnimation/ProfilePaths.h>
+#include <PhosphorSurface/DecorationProfileTree.h>
 #include <PhosphorSurface/SurfaceShaderContract.h>
 #include <PhosphorSurface/SurfaceShaderRegistry.h>
 
@@ -680,14 +681,30 @@ private:
     // clipped the inner surface). Coordinated with the per-window animation
     // transition on the SAME OffscreenEffect setShader() slot — see borders.cpp.
 
-    /// Lazily compile the selected surface shader pack (window border / rounded
-    /// corners — the "border" pack by default) on first use, from data/surface
-    /// via the SurfaceShaderRegistry. Returns the cached compiled shader (or
-    /// nullptr if the pack is missing or compilation failed — decoration then
-    /// no-ops). Recompiled if the selected pack id changes; cleared on teardown.
-    /// Named borderShader() for continuity — the only surface pack today is the
-    /// border, and the decoration STATE still comes from the tiling BorderState.
-    KWin::GLShader* borderShader();
+    /// Compile-on-first-use + cache the surface shader pack @p packId (window
+    /// border / rounded corners / glow / …) from data/surface via the
+    /// SurfaceShaderRegistry, keyed by pack id in m_compiledPacks. Returns the
+    /// cached CompiledSurfacePack (whose `shader` may be nullptr + `compileFailed`
+    /// set when the pack is missing or its compile failed — decoration then
+    /// no-ops for that pack), or nullptr only when there is no GL context yet.
+    /// The whole cache is cleared on a SurfaceShaderRegistry hot-reload
+    /// (effectsChanged) and on teardown.
+    ///
+    /// @p profile supplies the pack's parameter overrides (parameters[packId])
+    /// merged over the pack's declared defaults; baked into the compiled pack's
+    /// customParams/customColors VALUES at first compile (the cache is pack-keyed,
+    /// not pack+params-keyed — see CompiledSurfacePack).
+    CompiledSurfacePack* compiledPack(const QString& packId, const PhosphorSurfaceShaders::DecorationProfile& profile);
+
+    /// Resolve the CompiledSurfacePack for the window @p windowId's stored base
+    /// pack id (WindowBorder::basePackId), re-resolving its DecorationProfile from
+    /// the window's surface path to feed the pack's parameter overrides. Returns
+    /// nullptr when the window has no border entry, no GL context, or the pack's
+    /// compile failed (compileFailed latch / null shader) — the caller then
+    /// renders nothing for it. The single render-path lookup shared by
+    /// reconcileBorderShader / drawWindow / renderSurfaceChain /
+    /// renderSurfaceBufferPasses, replacing the old single m_borderShader.
+    CompiledSurfacePack* compiledPackForWindow(const QString& windowId);
 
     /// Populate the surface-shader registry's search paths (the bundled
     /// ${XDG_DATA_DIRS}/plasmazones/surface dirs + the user override) on first
@@ -703,16 +720,18 @@ private:
     /// transition end. Never unredirects a window the animation system owns.
     void reconcileBorderShader(const QString& windowId, KWin::EffectWindow* w);
 
-    /// Per-frame uniform push for a bordered window painted through the border
-    /// shader. Sets the 5 geometry/appearance uniforms (windowExpandedSize,
+    /// Per-frame uniform push for a bordered window painted through @p pack's
+    /// surface shader. Sets the geometry/appearance uniforms (windowExpandedSize,
     /// frameTopLeft, frameSize, thickness, outlineColor) from @p border and the
-    /// window's frame/expanded geometry × @p scale on the ALREADY-BOUND border
-    /// shader — the caller owns the KWin::ShaderBinder and routes the actual draw
-    /// through OffscreenEffect::drawWindow, whose OffscreenData::paint re-binds
+    /// window's frame/expanded geometry × @p scale, plus @p pack's resolved
+    /// customParams/customColors, on the ALREADY-BOUND pack shader — the caller
+    /// owns the KWin::ShaderBinder (bound to @p pack.shader) and routes the actual
+    /// draw through OffscreenEffect::drawWindow, whose OffscreenData::paint re-binds
     /// the same program and runs the shader. Does NOT bind/unbind or re-validate
-    /// the window: drawWindow is the sole caller and has already confirmed the
-    /// border is applied and no transition owns the slot.
-    void pushBorderUniforms(KWin::EffectWindow* w, const WindowBorder& border, qreal scale);
+    /// the window: drawWindow is the sole caller and has already resolved @p pack,
+    /// confirmed the border is applied, and ruled out a transition owning the slot.
+    void pushBorderUniforms(KWin::EffectWindow* w, const CompiledSurfacePack& pack, const WindowBorder& border,
+                            qreal scale);
 
     /// Render the window's active surface-layer stack into @p transition's
     /// ping-pong FBO chain and return the texture holding the final composited
@@ -745,61 +764,30 @@ private:
     bool renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal scale);
 
     /// Surface-shader pack registry (the "surface" category: window border /
-    /// rounded corners today). Discovers data/surface packs; the effect compiles
-    /// the selected one. Search paths populated lazily via ensureSurfaceRegistryPaths.
+    /// rounded corners / glow / …). Discovers data/surface packs; the effect
+    /// compiles each pack a resolved decoration chain references. Search paths
+    /// populated lazily via ensureSurfaceRegistryPaths.
     PhosphorSurfaceShaders::SurfaceShaderRegistry m_surfaceShaderRegistry;
     bool m_surfaceRegistryPathsAdded = false; ///< one-shot guard for the search-path population
-    /// Globally-selected surface pack id (default "border"). The tiling system
-    /// decides WHICH windows are decorated (BorderState); this picks the pack
-    /// that renders the decoration. Per-window-rule / per-daemon-surface
-    /// selection is a follow-up pass.
-    QString m_surfaceShaderId = QStringLiteral("border");
-    QString m_surfaceShaderCompiledId; ///< pack id m_borderShader was compiled for (recompile on change)
 
-    /// Compiled surface-pack MapTexture shader + cached contract uniform
-    /// locations. Shared by every decorated window (uniforms are per-window);
-    /// compiled on first use, owned for the effect's lifetime. The location
-    /// members map 1:1 to the surface contract uniforms (uSurfaceSize,
-    /// uSurfaceFrameTopLeft, uSurfaceFrameSize, uSurfaceRadius,
-    /// uSurfaceBorderWidth, uSurfaceColor).
-    std::unique_ptr<KWin::GLShader> m_borderShader;
-    bool m_borderShaderCompileFailed = false; ///< latch a failed compile so we don't retry every frame
-    /// MAIN surface shader iChannel0..3 sampler + iChannelResolution[0..3]
-    /// element locations. Filled in borderShader() where the other contract
-    /// locations are cached, and -1 when the linker dropped the uniform (a
-    /// single-pass pack never references them). The idle drawWindow path binds
-    /// the multipass buffer outputs to these so the main pass can sample the
-    /// pre-rendered buffer textures (see renderSurfaceBufferPasses).
-    std::array<int, 4> m_surfaceIChannelLoc{{-1, -1, -1, -1}};
-    std::array<int, 4> m_surfaceIChannelResolutionLoc{{-1, -1, -1, -1}};
-    int m_borderUWindowExpandedSizeLoc = -1; ///< uSurfaceSize — uTexture0 extent, device px
-    int m_borderUFrameTopLeftLoc = -1; ///< uSurfaceFrameTopLeft — frame top-left within the texture, device px
-    int m_borderUFrameSizeLoc = -1; ///< uSurfaceFrameSize — frame size excluding shadows, device px
-    int m_borderURadiusLoc = -1; ///< uSurfaceRadius — outer corner radius, device px
-    int m_borderUThicknessLoc = -1; ///< uSurfaceBorderWidth — decoration band thickness, device px
-    int m_borderUOutlineColorLoc = -1; ///< uSurfaceColor — resolved decoration colour (straight RGBA)
+    /// Per-surface decoration profile tree, delivered by the daemon as
+    /// `decorationProfileTreeJson` (Settings::decorationProfileTree). resolve()
+    /// over a window's surface path (window.tiled / window.snapped /
+    /// window.floating) yields the DecorationProfile that drives the window's
+    /// border appearance (width / radius / colours / showBorder) and its
+    /// surface-pack chain. Seeded in the constructor with a baseline matching
+    /// today's per-field defaults so decoration renders correctly before the
+    /// async fetch lands; replaced wholesale when the setting arrives.
+    PhosphorSurfaceShaders::DecorationProfileTree m_decorationTree;
 
-    /// Pack-declared parameter uniform locations + values for the compiled
-    /// surface shader. float/int/bool params pack into customParams[N], colours
-    /// into customColors[N] (addressed by the generated p_<id> preamble). Values
-    /// are resolved at compile time from the pack's declared defaults via
-    /// SurfaceShaderRegistry::translateSurfaceParams (the settings pass will feed
-    /// user overrides). The border pack declares none, so every slot resolves to
-    /// -1 and pushes nothing. Locations are (re)filled on each compile.
-    std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomParams> m_surfaceCustomParamsLoc{};
-    std::array<int, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors> m_surfaceCustomColorsLoc{};
-    std::array<QVector4D, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomParams>
-        m_surfaceCustomParamsValues{};
-    std::array<QVector4D, PhosphorSurfaceShaders::SurfaceShaderContract::kMaxCustomColors>
-        m_surfaceCustomColorsValues{};
-
-    /// Compiled buffer passes for a MULTIPASS surface pack (idle drawWindow
-    /// path only). Empty for single-pass packs (the border). Populated in
-    /// borderShader() after the main shader compiles, in bufferShaderPaths
-    /// order; cleared fail-closed if any pass fails to compile (the pack then
-    /// renders single-pass). Shared by every decorated window (the per-window
-    /// FBO targets live in m_surfaceMultipass).
-    std::vector<CompiledSurfaceBufferPass> m_surfaceBufferPasses;
+    /// Compiled surface-shader packs keyed by pack id (CompiledSurfacePack holds
+    /// the main MapTexture shader, contract uniform locations, pack-declared
+    /// param values, the main-pass iChannel locations, and the multipass buffer
+    /// passes for that one pack). Populated on first use by compiledPack();
+    /// cleared wholesale on a SurfaceShaderRegistry hot-reload (effectsChanged)
+    /// and on teardown. A window's render path looks up its resolved base pack id
+    /// (WindowBorder::basePackId) here.
+    std::unordered_map<QString, CompiledSurfacePack> m_compiledPacks;
 
     /// Per-window multipass FBO targets (surfaceTex + bufferTex chain). Keyed by
     /// getWindowId(w). Allocated lazily by renderSurfaceBufferPasses, reallocated
@@ -810,6 +798,26 @@ private:
     /// Resolve which mode's BorderState manages @p windowId — autotile first,
     /// then snap — or nullptr if neither draws a border for it.
     const PhosphorCompositor::BorderState* resolveBorderStateFor(const QString& windowId) const;
+
+    /// Resolve the DECORATION SURFACE PATH for @p windowId based on MEMBERSHIP
+    /// alone, IGNORING the owning mode's (legacy) showBorder gate:
+    ///   • autotile member (AutotileStateHelpers::isTiledWindow) → "window.tiled"
+    ///   • else snap member (SnapHandler::isTiledWindow)         → "window.snapped"
+    ///   • else                                                  → "window.floating"
+    /// Mirrors resolveBorderStateFor's autotile-first precedence, but the
+    /// membership predicates strip the showBorder coupling so the tree's
+    /// effectiveShowBorder() is the sole render gate (see updateWindowBorder).
+    QString resolveSurfacePathFor(const QString& windowId) const;
+
+    /// Seed m_decorationTree's baseline with the same per-field defaults the
+    /// daemon's ConfigDefaults::decorationProfileTree() assembles, so decoration
+    /// renders correctly before the async `decorationProfileTreeJson` fetch lands
+    /// (mirrors how BorderState seeds DecorationDefaults pre-load). Called once
+    /// from the constructor. The effect cannot reach the GPL daemon ConfigDefaults,
+    /// so it builds the baseline from the shared DecorationDefaults constants + the
+    /// default "border" pack id; colours default invalid (the daemon delivers the
+    /// resolved colours, exactly as BorderState's colours arrive invalid pre-load).
+    void seedDecorationTreeBaseline();
 
     /// Resolve the per-window-rule SetHideTitleBar override for @p windowId
     /// and forward it to the DecorationManager as a tri-state rule override

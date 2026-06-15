@@ -29,6 +29,21 @@ BaseUniformProfile::BaseUniformProfile()
 
 void BaseUniformProfile::fill(const UboFrameState& state)
 {
+    // NDC Y-orientation correction baked into qt_Matrix, folded in from the
+    // legacy uploadDirtyTextures() which set this EVERY frame. Identity with the
+    // Y-scale (column-major index 5 / m11) negated only on Y-up-in-NDC backends
+    // (OpenGL); plain identity on Vulkan. Direct-to-window animation vertex
+    // stages apply it as `gl_Position = qt_Matrix * vec4(position, 0, 1)`;
+    // overlay/zone stages (zone.vert) ignore it. Dropping this (the ctor seeds a
+    // FLIPLESS identity) left daemon animation shaders rendering Y-inverted on
+    // OpenGL — fill() must reassert it per the carried yUpInNDC, exactly as the
+    // sibling SurfaceUniformProfile does.
+    std::memset(m_u.qt_Matrix, 0, sizeof(m_u.qt_Matrix));
+    m_u.qt_Matrix[0] = 1.0f;
+    m_u.qt_Matrix[5] = state.yUpInNDC ? -1.0f : 1.0f;
+    m_u.qt_Matrix[10] = 1.0f;
+    m_u.qt_Matrix[15] = 1.0f;
+
     // Split full-precision m_time (double) into iTime (wrapped lo) + iTimeHi (wrap offset)
     m_u.iTime = state.time;
     m_u.iTimeHi = state.timeHi;

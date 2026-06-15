@@ -132,8 +132,13 @@ Item {
         height: root.shaderAnchorItem ? root.shaderAnchorItem.height : 0
         x: offscreenCoord
         y: offscreenCoord
-        // Inert until a pack resolves; with no decoration the card draws itself.
-        visible: false
+        // MUST stay visible: SurfaceAnimator's rationale (surfaceanimator.cpp
+        // ~640) is that visible:false (and opacity:0) suppress updatePaintNode
+        // and therefore the FBO render — starving the shader's uTexture0. The
+        // off-screen park above is what hides it; Qt keeps processing it there.
+        // When no pack resolves, sourceItem is null + hideSource false, so this
+        // captures nothing and the card draws itself normally.
+        visible: true
     }
 
     // ── Surface shader pass ──────────────────────────────────────────────────

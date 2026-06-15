@@ -24,7 +24,14 @@
 
 #include <PhosphorAnimation/SurfaceAnimator.h>
 
+#include <PhosphorSurface/DecorationProfile.h>
+#include <PhosphorSurface/DecorationProfileTree.h>
+#include <PhosphorSurface/SurfaceShaderEffect.h>
+#include <PhosphorSurface/SurfaceShaderRegistry.h>
+
 #include "../../core/isettings.h"
+
+#include <QUrl>
 
 namespace PlasmaZones {
 
@@ -289,6 +296,88 @@ void OverlayService::pushLayoutOsdContent(QObject* osdSlot, const LayoutOsdConte
     writeAutotileMetadata(osdSlot, p.showMasterDot, p.producesOverlappingZones, p.zoneNumberDisplay, p.masterCount);
     writeQmlProperty(osdSlot, QStringLiteral("zones"), p.zones);
     writeFontProperties(osdSlot, m_settings);
+    // Stage d: resolve + push the OSD's surface-shader decoration (rounded
+    // corners + border) onto the slot. Done here so every layout-OSD show path
+    // (showLayoutOsdImpl / showLayoutOsd(string…) / showDisabledOsd) decorates
+    // consistently; showNavigationOsd calls applyOsdDecoration directly since it
+    // does not route through pushLayoutOsdContent.
+    applyOsdDecoration(osdSlot);
+}
+
+void OverlayService::setSurfaceShaderRegistry(PhosphorSurfaceShaders::SurfaceShaderRegistry* registry)
+{
+    m_surfaceShaderRegistry = registry;
+}
+
+void OverlayService::applyOsdDecoration(QObject* osdSlot)
+{
+    if (!osdSlot) {
+        return;
+    }
+
+    // Helper to leave the slot undecorated: clear the source so the QML
+    // OsdSurfaceDecoration stays inert and the card draws its native chrome.
+    // Mirror applyShaderInfoToWindow's clear-first discipline (an empty URL
+    // tears down any prior decoration before new aux props would matter).
+    const auto clearDecoration = [osdSlot]() {
+        writeQmlProperty(osdSlot, QStringLiteral("decorationShaderSource"), QUrl());
+        writeQmlProperty(osdSlot, QStringLiteral("decorationParamPreamble"), QString());
+        writeQmlProperty(osdSlot, QStringLiteral("decorationShaderParams"), QVariant::fromValue(QVariantMap()));
+    };
+
+    if (!m_settings || !m_surfaceShaderRegistry) {
+        clearDecoration();
+        return;
+    }
+
+    // Resolve the "osd" surface path through the decoration tree. resolve()
+    // walks baseline → category → leaf and returns a DecorationProfile carrying
+    // an effective CHAIN (ordered pack ids) plus a per-pack parameters map.
+    const PhosphorSurfaceShaders::DecorationProfileTree tree = m_settings->decorationProfileTree();
+    const PhosphorSurfaceShaders::DecorationProfile profile = tree.resolve(QStringLiteral("osd"));
+    const QStringList chain = profile.effectiveChain();
+    if (chain.isEmpty()) {
+        // No decoration packs configured for the OSD — render it plainly.
+        clearDecoration();
+        return;
+    }
+
+    // OSD is single-pass for now: take the first pack id in the resolved chain.
+    // (Multi-pack composition over the OSD is out of scope for this stage.)
+    const QString packId = chain.constFirst();
+    if (!m_surfaceShaderRegistry->hasEffect(packId)) {
+        qCWarning(lcOverlay) << "OSD decoration: resolved pack id" << packId
+                             << "is not present in the surface-shader registry — rendering OSD without decoration";
+        clearDecoration();
+        return;
+    }
+
+    const PhosphorSurfaceShaders::SurfaceShaderEffect effect = m_surfaceShaderRegistry->effect(packId);
+    if (!effect.isValid() || effect.fragmentShaderPath.isEmpty()) {
+        qCWarning(lcOverlay) << "OSD decoration: pack" << packId
+                             << "has no valid fragment shader — rendering OSD without decoration";
+        clearDecoration();
+        return;
+    }
+
+    // The per-pack parameter overrides for THIS pack from the resolved profile.
+    // Shape is { packId -> { paramId -> value } }; pull this pack's inner map.
+    // p_useSystemAccent is declared host-consumed, but live system-accent
+    // resolution is a deferred roadmap item: for this stage the pack's declared
+    // colour params pass through translateSurfaceParams unchanged.
+    const QVariantMap allPackParams = profile.effectiveParameters();
+    const QVariantMap friendlyParams = allPackParams.value(packId).toMap();
+    const QVariantMap translatedParams = m_surfaceShaderRegistry->translateSurfaceParams(packId, friendlyParams);
+    const QString preamble = PhosphorSurfaceShaders::SurfaceShaderRegistry::paramPreamble(effect);
+
+    // Write order mirrors applyShaderInfoToWindow: clear the source first, push
+    // aux props (preamble + params), then write the source LAST so the QML
+    // SurfaceShaderItem's load triggers with the preamble/params already in
+    // place on its first bake.
+    writeQmlProperty(osdSlot, QStringLiteral("decorationShaderSource"), QUrl());
+    writeQmlProperty(osdSlot, QStringLiteral("decorationParamPreamble"), preamble);
+    writeQmlProperty(osdSlot, QStringLiteral("decorationShaderParams"), QVariant::fromValue(translatedParams));
+    writeQmlProperty(osdSlot, QStringLiteral("decorationShaderSource"), QUrl::fromLocalFile(effect.fragmentShaderPath));
 }
 
 void OverlayService::showDisabledOsd(const QString& reason, const QString& screenId)
@@ -562,6 +651,11 @@ void OverlayService::showNavigationOsd(bool success, const QString& action, cons
     QVariantList zonesList = PhosphorZones::LayoutUtils::zonesToVariantList(
         screenLayout, PhosphorZones::ZoneField::Minimal, QRectF(navScreenGeom));
     writeQmlProperty(osdSlot, QStringLiteral("zones"), zonesList);
+
+    // Stage d: resolve + push the OSD surface decoration. Navigation OSDs do
+    // not route through pushLayoutOsdContent, so apply it explicitly here (same
+    // decoration the layout-OSD paths get via pushLayoutOsdContent).
+    applyOsdDecoration(osdSlot);
 
     // Write mode AFTER data properties so the Loader-instantiated
     // NavigationOsdContent picks up correct values on first binding pass.

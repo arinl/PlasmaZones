@@ -167,6 +167,15 @@ Window {
         property int windowCount: 1
         property color errorColor: Kirigami.Theme.negativeTextColor
 
+        // Surface-shader decoration (Stage d). C++ OverlayService::applyOsdDecoration
+        // resolves the "osd" pack from DecorationProfileTree and writes these
+        // before each show; empty source = no decoration (card draws natively).
+        // Consumed by the OsdSurfaceDecoration sibling below, which captures the
+        // loaded card's PopupFrame shaderAnchor and re-renders it rounded.
+        property url decorationShaderSource
+        property string decorationParamPreamble: ""
+        property var decorationShaderParams: ({})
+
         /// Restart the loaded OSD content's auto-dismiss timer. C++
         /// invokes this after every OSD show via QMetaObject::invokeMethod.
         function restartDismissTimer() {
@@ -265,6 +274,20 @@ Window {
                 windowCount: osdSlot.windowCount
                 errorColor: osdSlot.errorColor
             }
+        }
+
+        // Surface-shader decoration (Stage d). SIBLING of osdLoader (never an
+        // ancestor of the captured card — a feedback loop). Captures the loaded
+        // card's PopupFrame shaderAnchor and re-renders it through the resolved
+        // "osd" surface pack (rounded corners + border), suppressing the card's
+        // own square-cornered direct draw via the snapshot's hideSource. Inert
+        // when decorationShaderSource is empty — the card then draws natively.
+        OsdSurfaceDecoration {
+            anchors.fill: parent
+            contentItem: osdLoader.item
+            decorationShaderSource: osdSlot.decorationShaderSource
+            decorationParamPreamble: osdSlot.decorationParamPreamble
+            decorationShaderParams: osdSlot.decorationShaderParams
         }
     }
 

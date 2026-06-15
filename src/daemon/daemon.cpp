@@ -566,6 +566,14 @@ void Daemon::setupSurfaceShaderEffects()
 
     m_surfaceShaderRegistry->setUserPath(userSurfaceDir);
     m_surfaceShaderRegistry->addSearchPaths(surfaceDirs);
+
+    // Stage d: hand the registry to the overlay service so the OSD show path can
+    // resolve its decoration pack's fragment shader + translated params. Borrow
+    // is nulled in stop() before the registry is reset, mirroring the animation
+    // registry's teardown.
+    if (m_overlayService) {
+        m_overlayService->setSurfaceShaderRegistry(m_surfaceShaderRegistry.get());
+    }
 }
 
 Daemon::~Daemon()
@@ -2031,8 +2039,11 @@ void Daemon::stop()
     // Reset the surface registry here too so its QFileSystemWatcher and the
     // effectsChanged → warm-bake connection (captured by value into the init()
     // lambda, targeting `this`) are torn down before the event loop can spin
-    // during shutdown. No overlay-service borrow to null first — the on-screen
-    // surface consumer is not wired yet.
+    // during shutdown. Null the overlay service's borrow FIRST (Stage d wired
+    // the OSD decoration consumer), mirroring the animation registry above.
+    if (m_overlayService) {
+        m_overlayService->setSurfaceShaderRegistry(nullptr);
+    }
     m_surfaceShaderRegistry.reset();
 
     // Stop pending timers to prevent callbacks during shutdown

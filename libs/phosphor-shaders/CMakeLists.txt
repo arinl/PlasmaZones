@@ -70,6 +70,7 @@ endif()
 set(phosphorshaders_public_HDRS
     include/PhosphorShaders/BaseUniforms.h
     include/PhosphorShaders/CustomParamsKey.h
+    include/PhosphorShaders/IUboProfile.h
     include/PhosphorShaders/IUniformExtension.h
     include/PhosphorShaders/IWallpaperProvider.h
     include/PhosphorShaders/ShaderEntryPoint.h
@@ -80,6 +81,7 @@ set(phosphorshaders_public_HDRS
 
 # Extension-less Qt-style camelcase forwarders, installed alongside the .h files.
 set(phosphorshaders_camelcase_HDRS
+    include/PhosphorShaders/IUboProfile
     include/PhosphorShaders/IUniformExtension
     include/PhosphorShaders/IWallpaperProvider
     include/PhosphorShaders/ShaderEntryPoint

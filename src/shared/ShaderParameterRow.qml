@@ -202,7 +202,11 @@ Item {
 
             visible: paramDelegate.paramType === "bool"
             Accessible.name: paramDelegate.paramData ? (paramDelegate.paramData.name || paramDelegate.paramData.id || "") : ""
-            text: paramDelegate.paramData ? (paramDelegate.paramData.description || "") : ""
+            // In compact mode the description is already rendered in the
+            // row's left-hand label column, so repeating it as the checkbox
+            // label would duplicate it. Only the wide layout (name-only left
+            // label) needs the checkbox to carry the description.
+            text: (paramDelegate.compact || !paramDelegate.paramData) ? "" : (paramDelegate.paramData.description || "")
             onToggled: {
                 if (paramDelegate.paramData)
                     paramDelegate.valueChanged(paramDelegate.paramData.id, checked);

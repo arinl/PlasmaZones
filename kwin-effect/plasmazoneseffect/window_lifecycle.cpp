@@ -119,18 +119,18 @@ void PlasmaZonesEffect::slotWindowAdded(KWin::EffectWindow* w)
     QString windowId = getWindowId(w);
     m_navigationHandler->syncFloatingStateForWindow(windowId);
 
-    // Create this window's border NOW so a freshly-opened window (a floating app
-    // window is eligible for the window-node border default) gets its decoration
-    // on first composite, not only after the next updateAllBorders (which used to
-    // be the sole trigger — fired on focus / desktop change, hence the "border
-    // only appears after a focus change" bug). updateWindowBorder self-gates
-    // (app-window filter + resolved chain) and is idempotent, so the snap /
-    // autotile paths re-running it later is harmless. If the window.open
-    // transition above already took the shader slot, reconcileBorderShader just
-    // records the WindowBorder entry and defers the shader to the transition-end
-    // re-apply (which needs that entry to exist). Current-desktop only, matching
-    // updateAllBorders (borders are visual; desktopChanged rebuilds the rest).
-    if (w->isOnCurrentDesktop()) {
+    // Decorate the new window immediately ONLY when no window.open transition is
+    // in flight. A floating app window is eligible for the window-node border
+    // default, but it used to get its border only on the next updateAllBorders
+    // (focus / desktop change) — hence "border appears after a focus change". The
+    // animated-open case is handled at transition end (endShaderTransition), which
+    // is also why creating the border here UNCONDITIONALLY broke the open
+    // animation: it fought the transition for the redirect/shader slot. So gate on
+    // hasTransition — if the open animation is running, defer to its end; if there
+    // is none, create the border now. updateWindowBorder self-gates and is
+    // idempotent (snap/autotile re-running it later is harmless). Current-desktop
+    // only, matching updateAllBorders.
+    if (w->isOnCurrentDesktop() && !m_shaderManager.hasTransition(w)) {
         updateWindowBorder(windowId, w);
     }
 

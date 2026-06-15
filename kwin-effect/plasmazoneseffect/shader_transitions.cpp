@@ -1396,6 +1396,23 @@ void PlasmaZonesEffect::endShaderTransition(KWin::EffectWindow* window)
         const bool stillBordered = m_windowBorders.contains(wid);
         if (stillBordered) {
             reconcileBorderShader(wid, window);
+        } else if (!releaseCloseGrab) {
+            // First decoration opportunity for a freshly-opened window. Its
+            // window.open animation borrowed the OffscreenEffect redirect/shader
+            // slot, so creating the border back in slotWindowAdded would fight the
+            // in-flight transition (and the open animation visibly broke). Now
+            // that the transition is torn down, create it here so the border
+            // appears the moment the open animation ends — no focus change needed.
+            // updateWindowBorder self-gates (app-window filter + non-empty chain)
+            // and re-applies via reconcileBorderShader (the transition is already
+            // erased, so it takes the apply branch). Skipped for a CLOSING window
+            // (releaseCloseGrab) — no point decorating a window on its way out.
+            // If the window isn't decoratable, hand the slot back to KWin.
+            updateWindowBorder(wid, window);
+            if (!m_windowBorders.contains(wid)) {
+                setShader(window, nullptr);
+                unredirect(window);
+            }
         } else {
             setShader(window, nullptr);
             unredirect(window);

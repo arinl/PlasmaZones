@@ -19,7 +19,10 @@
 #include <scene/windowitem.h>
 
 #include <PhosphorSurface/SurfaceShaderContract.h>
+#include <PhosphorSurface/SurfaceShaderEffect.h>
 
+#include <QLoggingCategory>
+#include <QMatrix4x4>
 #include <QPoint>
 #include <QRectF>
 #include <QSize>
@@ -30,6 +33,8 @@
 #include <epoxy/gl.h>
 
 namespace PlasmaZones {
+
+Q_DECLARE_LOGGING_CATEGORY(lcEffect)
 
 namespace {
 
@@ -378,6 +383,281 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
     }
 
     return true;
+}
+
+// Lazily compile the passthrough present shader. It samples a bound texture
+// (uFinal) at vTexCoord and writes it verbatim, ignoring uTexture0 (the
+// redirected surface KWin binds to unit 0). Used as a multi-pack window's
+// redirect shader so OffscreenData::paint presents the pre-composited final FBO
+// at window geometry — the vertex applies modelViewProjectionMatrix (set by
+// OffscreenData) exactly like the pack default vertex, so the geometry matches.
+KWin::GLShader* PlasmaZonesEffect::surfacePresentShader()
+{
+    if (m_surfacePresentShader) {
+        return m_surfacePresentShader.get();
+    }
+    if (m_surfacePresentFailed) {
+        return nullptr;
+    }
+    m_surfacePresentFailed = true; // pessimistic until the compile succeeds
+
+    static const QByteArray kPresentVertex = QByteArrayLiteral(
+        "#version 450\n\n"
+        "layout(location = 0) in vec2 position;\n"
+        "layout(location = 1) in vec2 texCoord;\n\n"
+        "layout(location = 0) out vec2 vTexCoord;\n\n"
+        "uniform mat4 modelViewProjectionMatrix;\n\n"
+        "void main() {\n"
+        "    vTexCoord = texCoord;\n"
+        "    gl_Position = modelViewProjectionMatrix * vec4(position, 0.0, 1.0);\n"
+        "}\n");
+    static const QByteArray kPresentFragment = QByteArrayLiteral(
+        "#version 450\n\n"
+        "layout(location = 0) in vec2 vTexCoord;\n\n"
+        "layout(location = 0) out vec4 fragColor;\n\n"
+        "uniform sampler2D uFinal;\n\n"
+        "void main() {\n"
+        "    fragColor = texture(uFinal, vTexCoord);\n"
+        "}\n");
+
+    auto shader = KWin::ShaderManager::instance()->generateCustomShader(KWin::ShaderTrait::MapTexture, kPresentVertex,
+                                                                        kPresentFragment);
+    if (!shader || !shader->isValid()) {
+        qCWarning(lcEffect) << "Failed to compile surface present shader — multi-pack decoration disabled this session";
+        return nullptr;
+    }
+    m_surfacePresentFinalLoc = shader->uniformLocation("uFinal");
+    m_surfacePresentShader = std::move(shader);
+    m_surfacePresentFailed = false;
+    return m_surfacePresentShader.get();
+}
+
+// Composite a multi-pack decoration chain (chain.size() > 1) into a per-window
+// ping-pong FBO and return the slot holding the final fold (drawWindow presents
+// it through surfacePresentShader). See the header for the full contract. Like
+// renderSurfaceBufferPasses this MUST run from paintWindow — it captures the raw
+// surface via effects->drawWindow, which re-enters KWin's draw-window iterator.
+KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChainComposite(KWin::EffectWindow* w, qreal scale)
+{
+    if (!w) {
+        return nullptr;
+    }
+    const QString windowId = getWindowId(w);
+    const auto bit = m_windowBorders.constFind(windowId);
+    if (bit == m_windowBorders.constEnd()) {
+        return nullptr;
+    }
+    const QStringList chain = bit->chain;
+    if (chain.size() < 2) {
+        return nullptr; // single-pack windows take the cheap OffscreenData path
+    }
+    namespace SC = PhosphorSurfaceShaders::SurfaceShaderContract;
+
+    // Size the targets to the window's expanded geometry × screen scale, with the
+    // same defensive cap as renderSurfaceBufferPasses / renderSurfaceChain.
+    const QRectF logicalGeometry = w->expandedGeometry();
+    qreal captureScale = scale;
+    constexpr qreal kMaxSurfaceDim = 8192.0;
+    const qreal longestPx = qMax(logicalGeometry.width(), logicalGeometry.height()) * captureScale;
+    if (longestPx > kMaxSurfaceDim) {
+        captureScale *= kMaxSurfaceDim / longestPx;
+    }
+    const QSize textureSize = (logicalGeometry.size() * captureScale).toSize();
+    if (textureSize.isEmpty()) {
+        return nullptr;
+    }
+
+    // The resolved profile feeds each pack's compiled parameter overrides.
+    const PhosphorSurfaceShaders::DecorationProfile profile = m_decorationTree.resolve(resolveSurfacePathFor(windowId));
+
+    SurfaceMultipassState& state = m_surfaceMultipass[windowId];
+
+    // (Re)allocate the composite ping-pong pair on a size change.
+    if (state.compositeSize != textureSize || !state.compositeTex[0] || !state.compositeTex[1]) {
+        for (auto& t : state.compositeTex) {
+            t = KWin::GLTexture::allocate(GL_RGBA8, textureSize);
+            if (!t) {
+                m_surfaceMultipass.erase(windowId);
+                return nullptr;
+            }
+            t->setFilter(GL_LINEAR);
+            t->setWrapMode(GL_CLAMP_TO_EDGE);
+        }
+        state.compositeSize = textureSize;
+        state.chainKey.clear(); // force the per-pack buffers to reallocate at the new size
+    }
+
+    // (Re)allocate the cached per-pack buffer textures when the chain or size
+    // changes. chainBufferTex[k] holds one texture per pack k's buffer passes,
+    // downscaled by that pack's bufferScale; a pack that fails to compile (or has
+    // no buffers) leaves an empty inner vector and renders single-pass in the fold.
+    if (state.chainKey != chain) {
+        state.chainBufferTex.clear();
+        state.chainBufferTex.resize(chain.size());
+        for (int k = 0; k < chain.size(); ++k) {
+            CompiledSurfacePack* const pk = compiledPack(chain.at(k), profile);
+            if (!pk || !pk->shader || pk->bufferPasses.empty()) {
+                continue;
+            }
+            const PhosphorSurfaceShaders::SurfaceShaderEffect eff = m_surfaceShaderRegistry.effect(chain.at(k));
+            const qreal bufferScale =
+                qBound(PhosphorSurfaceShaders::SurfaceShaderEffect::kMinBufferScale, eff.bufferScale,
+                       PhosphorSurfaceShaders::SurfaceShaderEffect::kMaxBufferScale);
+            const QSize bufferSize(qMax(1, qRound(textureSize.width() * bufferScale)),
+                                   qMax(1, qRound(textureSize.height() * bufferScale)));
+            auto& bufs = state.chainBufferTex[k];
+            bufs.reserve(pk->bufferPasses.size());
+            for (size_t i = 0; i < pk->bufferPasses.size(); ++i) {
+                std::unique_ptr<KWin::GLTexture> bt = KWin::GLTexture::allocate(GL_RGBA8, bufferSize);
+                if (!bt) {
+                    bufs.clear(); // pack k degrades to no buffers (iChannels sampled as 0)
+                    break;
+                }
+                bt->setFilter(GL_LINEAR);
+                bt->setWrapMode(GL_CLAMP_TO_EDGE);
+                bufs.push_back(std::move(bt));
+            }
+        }
+        state.chainKey = chain;
+    }
+
+    // ── Step 1: capture the raw window surface into compositeTex[0] ───────────
+    // Same capture as renderSurfaceBufferPasses (bypass the redirect shader so the
+    // capture is the raw composited window), then restore the present passthrough.
+    {
+        KWin::GLFramebuffer fbo(state.compositeTex[0].get());
+        if (!fbo.valid()) {
+            return nullptr;
+        }
+        setShader(w, nullptr);
+        m_capturingSnapshot = true;
+        {
+            KWin::RenderTarget renderTarget(&fbo);
+            KWin::RenderViewport viewport(logicalGeometry, captureScale, renderTarget, QPoint());
+            KWin::GLFramebuffer::pushFramebuffer(&fbo);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            KWin::ItemEffect keepRenderable(w->windowItem());
+            KWin::WindowPaintData captureData;
+            captureData.setOpacity(1.0);
+            const int captureMask = PAINT_WINDOW_TRANSFORMED | PAINT_WINDOW_TRANSLUCENT;
+            KWin::effects->drawWindow(renderTarget, viewport, w, captureMask, KWin::Region::infinite(), captureData);
+            KWin::GLFramebuffer::popFramebuffer();
+        }
+        m_capturingSnapshot = false;
+        setShader(w, surfacePresentShader());
+    }
+
+    // ── Step 2: fold each pack over the running composite ────────────────────
+    int src = 0;
+    for (int k = 0; k < chain.size(); ++k) {
+        CompiledSurfacePack* const pk = compiledPack(chain.at(k), profile);
+        if (!pk || !pk->shader) {
+            continue; // skip a failed pack; the composite carries through unchanged
+        }
+        const std::vector<std::unique_ptr<KWin::GLTexture>>& bufs = state.chainBufferTex[k];
+
+        // 2a: pack k's buffer passes, sampling the running composite as uTexture0.
+        const size_t passCount = qMin(bufs.size(), pk->bufferPasses.size());
+        for (size_t i = 0; i < passCount; ++i) {
+            const CompiledSurfaceBufferPass& pass = pk->bufferPasses[i];
+            KWin::GLTexture* const target = bufs[i].get();
+            KWin::GLFramebuffer fbo(target);
+            if (!fbo.valid()) {
+                continue;
+            }
+            KWin::GLFramebuffer::pushFramebuffer(&fbo);
+            glViewport(0, 0, target->width(), target->height());
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            {
+                KWin::ShaderBinder binder(pass.shader.get());
+                glActiveTexture(GL_TEXTURE0);
+                state.compositeTex[src]->bind();
+                if (pass.uTexture0Loc >= 0) {
+                    pass.shader->setUniform(pass.uTexture0Loc, 0);
+                }
+                for (size_t j = 0; j < i && j < 4; ++j) {
+                    glActiveTexture(GL_TEXTURE1 + static_cast<int>(j));
+                    bufs[j]->bind();
+                    if (pass.iChannelLoc[j] >= 0) {
+                        pass.shader->setUniform(pass.iChannelLoc[j], 1 + static_cast<int>(j));
+                    }
+                    if (pass.iChannelResolutionLoc[j] >= 0) {
+                        const QVector4D res(static_cast<float>(bufs[j]->width()), static_cast<float>(bufs[j]->height()),
+                                            0.0f, 0.0f);
+                        pass.shader->setUniform(pass.iChannelResolutionLoc[j], res);
+                    }
+                }
+                for (int slot = 0; slot < SC::kMaxCustomParams; ++slot) {
+                    if (pass.customParamsLoc[slot] >= 0) {
+                        pass.shader->setUniform(pass.customParamsLoc[slot], pk->customParamsValues[slot]);
+                    }
+                }
+                for (int slot = 0; slot < SC::kMaxCustomColors; ++slot) {
+                    if (pass.customColorsLoc[slot] >= 0) {
+                        pass.shader->setUniform(pass.customColorsLoc[slot], pk->customColorsValues[slot]);
+                    }
+                }
+                drawFullscreenQuad();
+            }
+            for (size_t j = 0; j < i && j < 4; ++j) {
+                glActiveTexture(GL_TEXTURE1 + static_cast<int>(j));
+                glBindTexture(GL_TEXTURE_2D, 0);
+            }
+            glActiveTexture(GL_TEXTURE0);
+            KWin::GLFramebuffer::popFramebuffer();
+        }
+
+        // 2b: pack k's MAIN as a fullscreen FBO pass → the other composite slot.
+        const int dst = 1 - src;
+        KWin::GLTexture* const target = state.compositeTex[dst].get();
+        KWin::GLFramebuffer fbo(target);
+        if (!fbo.valid()) {
+            continue;
+        }
+        KWin::GLFramebuffer::pushFramebuffer(&fbo);
+        glViewport(0, 0, target->width(), target->height());
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        {
+            KWin::ShaderBinder binder(pk->shader.get());
+            // Identity MVP so the NDC fullscreen quad from drawFullscreenQuad maps
+            // 1:1 through the pack's default (MVP) vertex stage.
+            pk->shader->setUniform(KWin::GLShader::Mat4Uniform::ModelViewProjectionMatrix, QMatrix4x4());
+            glActiveTexture(GL_TEXTURE0);
+            state.compositeTex[src]->bind();
+            if (pk->uTexture0Loc >= 0) {
+                pk->shader->setUniform(pk->uTexture0Loc, 0);
+            }
+            const int n = qMin(static_cast<int>(bufs.size()), 4);
+            for (int i = 0; i < n; ++i) {
+                glActiveTexture(GL_TEXTURE1 + i);
+                bufs[i]->bind();
+                if (pk->iChannelLoc[i] >= 0) {
+                    pk->shader->setUniform(pk->iChannelLoc[i], 1 + i);
+                }
+                if (pk->iChannelResolutionLoc[i] >= 0) {
+                    const QVector4D res(static_cast<float>(bufs[i]->width()), static_cast<float>(bufs[i]->height()),
+                                        0.0f, 0.0f);
+                    pk->shader->setUniform(pk->iChannelResolutionLoc[i], res);
+                }
+            }
+            // Contract uniforms + pack params (shared with the OffscreenData path).
+            pushBorderUniforms(w, *pk, captureScale);
+            drawFullscreenQuad();
+        }
+        for (int i = 0; i < qMin(static_cast<int>(bufs.size()), 4); ++i) {
+            glActiveTexture(GL_TEXTURE1 + i);
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
+        glActiveTexture(GL_TEXTURE0);
+        KWin::GLFramebuffer::popFramebuffer();
+        src = dst;
+    }
+
+    state.finalSlot = src;
+    return state.compositeTex[src].get();
 }
 
 } // namespace PlasmaZones

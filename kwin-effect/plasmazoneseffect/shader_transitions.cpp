@@ -1986,6 +1986,11 @@ CompiledSurfacePack* PlasmaZonesEffect::compiledPack(const QString& packId,
     packState.uFrameSizeLoc = shader->uniformLocation(SC::kUSurfaceFrameSize);
     packState.uScaleLoc = shader->uniformLocation(SC::kUSurfaceScale);
     packState.uFocusedLoc = shader->uniformLocation(SC::kUSurfaceFocused);
+    // uTexture0 sampler — only consulted on the multi-pack composite path, which
+    // runs the main pass as a fullscreen FBO pass and binds the running composite
+    // to unit 0 itself. -1 on a single-pass border-only pack would be unusual
+    // (it samples the surface), but harmless if so.
+    packState.uTexture0Loc = shader->uniformLocation(SC::kUTexture0);
 
     // MAIN-pass multipass channel locations: the buffer-pass outputs are bound
     // here (idle drawWindow path) as iChannel0..3 so the main effect.frag can

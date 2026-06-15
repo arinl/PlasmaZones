@@ -1090,7 +1090,14 @@ void PlasmaZonesEffect::paintWindow(const KWin::RenderTarget& renderTarget, cons
     if (!m_capturingSnapshot && !m_windowBorders.isEmpty() && !m_shaderManager.findTransition(w)) {
         const auto bit = m_windowBorders.constFind(getWindowId(w));
         if (bit != m_windowBorders.constEnd() && bit->shaderApplied) {
-            renderSurfaceBufferPasses(w, viewport.scale());
+            if (bit->chain.size() > 1) {
+                // MULTI-PACK: composite the whole chain into a per-window FBO here
+                // (each pack's main runs as an FBO pass); drawWindow then presents
+                // the final FBO through the passthrough present shader.
+                renderSurfaceChainComposite(w, viewport.scale());
+            } else {
+                renderSurfaceBufferPasses(w, viewport.scale());
+            }
         }
     }
 

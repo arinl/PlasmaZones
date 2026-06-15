@@ -765,6 +765,28 @@ private:
     /// chain is a follow-up.
     bool renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal scale);
 
+    /// Composite a MULTI-PACK decoration chain (chain.size() > 1) for @p w into a
+    /// per-window ping-pong FBO and return the texture holding the final fold (or
+    /// nullptr — single-pack / no border / allocation failure — the caller then
+    /// takes the single-pack path). Captures the raw surface, then folds each pack
+    /// over the running composite: the pack's buffer passes run sampling the
+    /// composite, then its main runs as a fullscreen FBO pass (composite on unit
+    /// 0, its buffers as iChannels) into the other slot. drawWindow presents the
+    /// final slot through surfacePresentShader(). Buffers are cached per
+    /// window+chain (animation-ready). Implemented in surfacelayers.cpp; like
+    /// renderSurfaceBufferPasses it MUST be driven from paintWindow (it captures
+    /// via effects->drawWindow).
+    KWin::GLTexture* renderSurfaceChainComposite(KWin::EffectWindow* w, qreal scale);
+
+    /// Lazily-compiled passthrough shader that samples a bound texture (uFinal)
+    /// at vTexCoord and writes it verbatim. Used as the redirect shader for a
+    /// multi-pack window so OffscreenData::paint presents the pre-composited
+    /// final FBO at window geometry. nullptr if the one-shot compile failed.
+    KWin::GLShader* surfacePresentShader();
+    std::unique_ptr<KWin::GLShader> m_surfacePresentShader; ///< compiled passthrough present shader
+    int m_surfacePresentFinalLoc = -1; ///< uFinal sampler location on the present shader
+    bool m_surfacePresentFailed = false; ///< latch a failed present-shader compile
+
     /// Surface-shader pack registry (the "surface" category: window border /
     /// rounded corners / glow / …). Discovers data/surface packs; the effect
     /// compiles each pack a resolved decoration chain references. Search paths

@@ -416,15 +416,23 @@ void PlasmaZonesEffect::reconcileBorderShader(const QString& windowId, KWin::Eff
     }
 
     if (wantsBorder) {
-        // Compile-on-first-use the window's resolved base pack; a failed compile
-        // latches and no-ops.
-        CompiledSurfacePack* const pack = compiledPackForWindow(windowId);
-        if (!pack) {
-            // No surface pack available (compile failed/latched, or no pack
-            // resolved). Don't leave the window stuck redirected with a stale
-            // shader bound: a transition that just ended hands the slot back here
-            // still redirected (its setShader remains until we clear it), so tear
-            // the redirect down rather than blit a dead shader forever.
+        // The redirect shader OffscreenData::paint runs to present this window:
+        //   single pack → the pack's own main shader (it blits the redirected
+        //                 surface through itself, sampling its buffer iChannels);
+        //   multi pack  → the passthrough present shader, which samples the
+        //                 pre-composited final FBO that paintWindow's
+        //                 renderSurfaceChainComposite produced (the per-pack mains
+        //                 ran as FBO passes there, not via OffscreenData).
+        // Both compile-on-first-use; a null result tears the redirect down rather
+        // than leave the window blitting a dead/stale shader forever (a just-ended
+        // transition hands the slot back here still redirected).
+        KWin::GLShader* redirectShader = nullptr;
+        if (it->chain.size() > 1) {
+            redirectShader = surfacePresentShader();
+        } else if (CompiledSurfacePack* const pack = compiledPackForWindow(windowId)) {
+            redirectShader = pack->shader.get();
+        }
+        if (!redirectShader) {
             // setShader(nullptr)/unredirect are no-ops when the window was never
             // redirected.
             setShader(w, nullptr);
@@ -435,7 +443,7 @@ void PlasmaZonesEffect::reconcileBorderShader(const QString& windowId, KWin::Eff
         // redirect() is idempotent for an already-redirected window; setShader()
         // replaces any prior pointer. Re-applying the same shader is a no-op.
         redirect(w);
-        setShader(w, pack->shader.get());
+        setShader(w, redirectShader);
         it->shaderApplied = true;
     } else if (it != m_windowBorders.end() && it->shaderApplied) {
         // Border removed but we still own the slot and no transition raced in.
@@ -546,7 +554,28 @@ void PlasmaZonesEffect::drawWindow(const KWin::RenderTarget& renderTarget, const
     constexpr int kSurfaceChannelBaseUnit = 3 + PhosphorAnimationShaders::AnimationShaderContract::kMaxUserTextureSlots;
     if (!m_capturingSnapshot && !m_windowBorders.isEmpty() && !m_shaderManager.findTransition(w)) {
         const auto bit = m_windowBorders.constFind(getWindowId(w));
-        if (bit != m_windowBorders.constEnd() && bit->shaderApplied) {
+        if (bit != m_windowBorders.constEnd() && bit->shaderApplied && bit->chain.size() > 1) {
+            // MULTI-PACK present: the whole chain was already composited into a
+            // per-window FBO by paintWindow (renderSurfaceChainComposite). Bind the
+            // final slot to a high unit and point the present passthrough's uFinal
+            // at it. OffscreenData::paint re-binds the present program (the
+            // setShader one from reconcileBorderShader) for its blit, so the
+            // uniform persists; the texture stays bound until the post-draw cleanup.
+            KWin::GLShader* const present = surfacePresentShader();
+            const auto stateIt = m_surfaceMultipass.find(getWindowId(w));
+            if (present && stateIt != m_surfaceMultipass.end()
+                && stateIt->second.compositeTex[stateIt->second.finalSlot]) {
+                const int unit = kSurfaceChannelBaseUnit;
+                KWin::ShaderBinder binder(present);
+                glActiveTexture(GL_TEXTURE0 + unit);
+                stateIt->second.compositeTex[stateIt->second.finalSlot]->bind();
+                if (m_surfacePresentFinalLoc >= 0) {
+                    present->setUniform(m_surfacePresentFinalLoc, unit);
+                }
+                glActiveTexture(GL_TEXTURE0);
+                boundChannels = 1; // unit kSurfaceChannelBaseUnit+0, freed in the cleanup below
+            }
+        } else if (bit != m_windowBorders.constEnd() && bit->shaderApplied) {
             // Per-window resolved base pack — replaces the old single global
             // m_borderShader. nullptr → compile failed/latched (render nothing).
             CompiledSurfacePack* const pack = compiledPackForWindow(getWindowId(w));

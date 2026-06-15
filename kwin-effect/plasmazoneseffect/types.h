@@ -89,6 +89,12 @@ struct CompiledSurfacePack
     int uFrameSizeLoc = -1; ///< uSurfaceFrameSize — frame size excluding shadows, device px
     int uScaleLoc = -1; ///< uSurfaceScale — logical-to-device pixel scale
     int uFocusedLoc = -1; ///< uSurfaceFocused — 1.0 focused / 0.0 unfocused
+    /// uTexture0 — the input-surface sampler (unit 0). On the single-pack path
+    /// OffscreenData::paint binds the redirected surface to unit 0 automatically,
+    /// so this is unused there; the multi-pack composite (renderSurfaceChainComposite)
+    /// runs the main pass as a fullscreen FBO pass and binds the running composite
+    /// to unit 0 itself, setting this explicitly.
+    int uTexture0Loc = -1;
 
     /// MAIN-pass iChannel0..3 sampler + iChannelResolution[0..3] element
     /// locations. -1 when the linker dropped the uniform (single-pass pack).
@@ -128,9 +134,26 @@ struct CompiledSurfacePack
 /// changes; erased on window close / border removal to free GPU memory.
 struct SurfaceMultipassState
 {
+    // ── Single-pack-with-buffers path (renderSurfaceBufferPasses) ────────────
+    // One pack with buffer passes, presented through OffscreenData. Unused on
+    // the multi-pack path below (a window uses one path or the other).
     std::unique_ptr<KWin::GLTexture> surfaceTex;
     std::vector<std::unique_ptr<KWin::GLTexture>> bufferTex;
-    QSize size; ///< full textureSize the targets were allocated for
+    QSize size; ///< full textureSize the single-pack targets were allocated for
+
+    // ── Multi-pack chain compositing path (renderSurfaceChainComposite) ──────
+    // The two composite textures ping-pong as the chain is folded pack-by-pack;
+    // `finalSlot` names the slot holding the last fold (presented by drawWindow
+    // through the passthrough shader). `chainBufferTex[k]` caches pack k's
+    // buffer-pass outputs so an ANIMATED pack (future iTime support) does not
+    // reallocate its scratch textures every frame. All are sized for
+    // `compositeSize` / `chainKey` and rebuilt only when the window size or the
+    // resolved chain changes.
+    std::array<std::unique_ptr<KWin::GLTexture>, 2> compositeTex;
+    std::vector<std::vector<std::unique_ptr<KWin::GLTexture>>> chainBufferTex;
+    QStringList chainKey; ///< the chain `chainBufferTex` was allocated for
+    QSize compositeSize; ///< full textureSize the composite targets were allocated for
+    int finalSlot = 0; ///< which compositeTex slot holds the final fold
 };
 
 /// Per-window border + rounded corners, rendered by sampling the redirected

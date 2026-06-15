@@ -7,21 +7,18 @@ import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
 /**
- * @brief Per-surface decoration override card.
+ * @brief Per-surface decoration override card. Mirrors AnimationEventCard.
  *
- * One card per surface path. Leaf paths (window.tiled, osd,
- * popup.snapAssist, …) are concrete surfaces; CATEGORY paths (window,
- * popup) are parent nodes whose override cascades to every descendant leaf
- * unless that leaf has its own override. Mirrors AnimationEventCard: an
- * override toggle gates a per-surface override in the DecorationProfileTree.
- * When off, the card shows the RESOLVED chain (the walk-up result) read-only
- * with an "Inheriting from: …" breadcrumb (leaf) or a parent-node banner
- * (category). When on, it edits the DIRECT override at this path — a
- * ChainEditor (where border width / radius / colour are the "border" pack's
- * own inline parameters, NOT a separate appearance block) plus a single
- * "Hide title bar" toggle. Toggling the override OFF clears it (reset to
- * inherited) — exactly like AnimationEventCard; there is no separate reset
- * button.
+ * One card per surface path. CATEGORY paths (window, popup) and the
+ * standalone surfaces (osd, overlay) are alwaysEnabled ROOTS — there is no
+ * global decoration default above them, so they have no override toggle and
+ * always edit their own profile (a category root additionally shows the
+ * "applies to all children" cascade banner). Concrete leaf paths under a
+ * category (window.tiled / window.snapped / window.floating, popup.*) are
+ * override cards: the master toggle engages a per-surface override in the
+ * DecorationProfileTree; OFF clears it (reset to inherited — same as
+ * AnimationEventCard, no separate reset button) and the card shows the
+ * RESOLVED chain read-only with an "Inheriting from: …" breadcrumb.
  *
  * Reactive-latch pattern: imperative refresh from the controller on
  * `profilesChanged` / `shaderEffectsChanged`, NOT function bindings that
@@ -29,23 +26,29 @@ import org.kde.kirigami as Kirigami
  *
  * Required properties:
  *   - surfacePath: full path (e.g. "window.tiled" leaf, or "window" category)
+ *   - cardLabel: i18n() display label from the page model (like
+ *     AnimationEventCard.eventLabel) — labels are translated in QML, not C++.
  * Optional:
- *   - isParentNode: bool — flips the inheritance banner copy for a category
- *     node ("All windows" / "All popups").
+ *   - alwaysEnabled: bool — root surface (no override toggle, always editing).
+ *   - isParentNode: bool — category node; shows the cascade banner.
  *   - showTitlebarToggle: bool — exposes the "Hide title bar" control. Title
  *     bars only make sense for WINDOWS, so only the window-subtree cards set
- *     this true; daemon surfaces (osd / popup / overlay) leave it false and
- *     never show the toggle.
+ *     this true; daemon surfaces (osd / popup / overlay) leave it false.
  */
 Item {
     id: root
 
     required property string surfacePath
-    property bool collapsible: false
+    required property string cardLabel
+    property bool alwaysEnabled: false
     property bool isParentNode: false
     property bool showTitlebarToggle: false
 
     readonly property var bridge: settingsController.decorationPage
+
+    // True when this card edits its own DIRECT profile: an alwaysEnabled root
+    // always does; a leaf only when its override is engaged.
+    readonly property bool _editing: root.alwaysEnabled || root._hasOverride
 
     // ── Reactive model state ─────────────────────────────────────────────
     property var _effects: []
@@ -58,27 +61,21 @@ Item {
     // resolved chain (so the user previews "what they'd start from").
     property var _chain: []
     property var _params: ({})
-    property string _label: ""
     property string _parentChainText: ""
 
+    // Ancestor breadcrumb as raw dotted paths joined "child ← parent", matching
+    // AnimationEventCard.parentChainText (labels are not re-derived in C++).
     function _computeParentChainText() {
         if (!root.bridge)
             return "";
         var chain = root.bridge.parentChain(root.surfacePath);
-        // Drop self (chain[0]); show ancestors then the global baseline.
-        var rest = (chain.length > 1) ? chain.slice(1) : [];
-        var labels = [];
-        for (var i = 0; i < rest.length; i++)
-            labels.push(root.bridge.surfaceLabel(rest[i]));
-        labels.push(i18n("Global"));
-        return labels.join(" ← ");
+        return (chain.length > 1) ? chain.slice(1).join(" ← ") : "";
     }
 
     function refresh() {
         if (!root.bridge)
             return;
         root._effects = root.bridge.availableShaderEffects();
-        root._label = root.bridge.surfaceLabel(root.surfacePath);
         root._hasOverride = root.bridge.hasOverride(root.surfacePath);
         root._resolved = root.bridge.resolvedProfile(root.surfacePath);
         root._raw = root.bridge.rawProfile(root.surfacePath);
@@ -87,8 +84,8 @@ Item {
         root._parentChainText = root._computeParentChainText();
     }
 
-    // Engage a per-surface override: seed the chain with the currently
-    // resolved chain so the override starts visibly equal to what was
+    // Engage a per-surface override (leaf toggle ON): seed the chain with the
+    // currently resolved chain so the override starts visibly equal to what was
     // inherited, then the user diverges from there.
     function _engageOverride() {
         if (root.bridge)
@@ -139,10 +136,11 @@ Item {
         id: card
 
         anchors.fill: parent
-        headerText: root._label
-        showToggle: true
-        toggleChecked: root._hasOverride
-        collapsible: root.collapsible
+        headerText: root.cardLabel
+        // alwaysEnabled roots have nothing to inherit, so no override toggle —
+        // mirrors AnimationEventCard's alwaysEnabled global root.
+        showToggle: !root.alwaysEnabled
+        toggleChecked: root._editing
         onToggleClicked: function (checked) {
             if (checked)
                 root._engageOverride();
@@ -153,14 +151,14 @@ Item {
         contentItem: ColumnLayout {
             spacing: Kirigami.Units.smallSpacing
 
-            // ── Inheritance summary (override off) ────────────────────────
-            // Parent-node category cards explain the cascade when ON; leaf
-            // cards explain inheritance when OFF — same split as
+            // ── Inheritance summary ───────────────────────────────────────
+            // Category roots show the cascade banner; leaf cards show the
+            // inheritance breadcrumb when not overriding — same split as
             // AnimationEventCard.
             Kirigami.InlineMessage {
                 Layout.fillWidth: true
                 type: Kirigami.MessageType.Information
-                visible: root.isParentNode ? root._hasOverride : !root._hasOverride
+                visible: root.isParentNode ? root._editing : !root._editing
                 text: {
                     if (root.isParentNode)
                         return i18n("Settings here apply to all child surfaces unless individually overridden.");
@@ -170,17 +168,17 @@ Item {
 
             Label {
                 Layout.fillWidth: true
-                visible: !root._hasOverride
+                visible: !root._editing
                 text: i18n("Current: %1", root._resolvedSummary())
                 font.italic: true
                 color: Kirigami.Theme.disabledTextColor
                 wrapMode: Text.WordWrap
             }
 
-            // ── Override editor (override on) ─────────────────────────────
+            // ── Override editor ───────────────────────────────────────────
             ColumnLayout {
                 Layout.fillWidth: true
-                visible: root._hasOverride
+                visible: root._editing
                 spacing: Kirigami.Units.largeSpacing
 
                 Label {

@@ -101,25 +101,5 @@ inline QVariantMap profileToResolvedMap(const PhosphorSurfaceShaders::Decoration
     return profileToSparseMap(profile.withDefaults());
 }
 
-/// Title-case a single camelCase segment: "snapAssist" -> "Snap Assist",
-/// "tiled" -> "Tiled". Splits on lower->upper transitions. Shared so the
-/// surface-label format stays in one place across the two TUs.
-inline QString humanizeSegment(const QString& segment)
-{
-    if (segment.isEmpty())
-        return segment;
-    QString out;
-    out.reserve(segment.size() + 4);
-    out.append(segment.front().toUpper());
-    for (int i = 1; i < segment.size(); ++i) {
-        const QChar prev = segment.at(i - 1);
-        const QChar cur = segment.at(i);
-        if (cur.isUpper() && prev.isLower())
-            out.append(QLatin1Char(' '));
-        out.append(cur);
-    }
-    return out;
-}
-
 } // namespace decoration_controller_detail
 } // namespace PlasmaZones

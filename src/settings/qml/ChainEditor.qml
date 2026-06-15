@@ -21,7 +21,7 @@ import org.plasmazones.common as PZCommon
  * bottom appends a pack not already in the chain.
  *
  * Pure props-and-signals — the component owns no persistence. The host
- * (DecorationGeneralPage / DecorationSurfaceCard) feeds:
+ * (DecorationSurfaceCard) feeds:
  *   - availableShaders: QVariantList of effect maps (id / name / parameters)
  *   - chain:            QStringList of pack ids in order
  *   - packParameters:   { packId -> { paramId -> value } } override map

@@ -24,14 +24,16 @@ import org.kde.kirigami as Kirigami
  *   DecorationSurfaceCardList {
  *       Accessible.name: i18n("Window decoration surfaces")
  *       headerText: i18n("…optional orientation banner…")
- *       surfaceModel: [ { surfacePath, isParentNode, showTitlebarToggle }, … ]
+ *       surfaceModel: [ { surfacePath, cardLabel, alwaysEnabled,
+ *                         isParentNode, showTitlebarToggle }, … ]
  *   }
  */
 SettingsFlickable {
     id: page
 
-    /// Ordered list of `{ surfacePath: string, isParentNode: bool,
-    /// showTitlebarToggle: bool }` — one DecorationSurfaceCard per entry.
+    /// Ordered list of `{ surfacePath: string, cardLabel: string (i18n),
+    /// alwaysEnabled: bool, isParentNode: bool, showTitlebarToggle: bool }` —
+    /// one DecorationSurfaceCard per entry.
     property var surfaceModel: []
     /// Optional orientation banner rendered above the cards. Empty = none.
     property string headerText: ""
@@ -106,6 +108,8 @@ SettingsFlickable {
 
                 sourceComponent: DecorationSurfaceCard {
                     surfacePath: cardLoader.modelData.surfacePath
+                    cardLabel: cardLoader.modelData.cardLabel
+                    alwaysEnabled: cardLoader.modelData.alwaysEnabled === true
                     isParentNode: cardLoader.modelData.isParentNode === true
                     showTitlebarToggle: cardLoader.modelData.showTitlebarToggle === true
                 }

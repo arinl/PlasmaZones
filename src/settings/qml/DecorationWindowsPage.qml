@@ -2,38 +2,44 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import QtQuick
 
-// Decoration → Surfaces → Windows. The card list is viewport-virtualized by
-// DecorationSurfaceCardList (only visible DecorationSurfaceCards build) — see
-// that component for the rationale. Mirrors AnimationsWindowsPage's thin
-// model-declaration shape.
+// Decoration → Windows. Viewport-virtualized by DecorationSurfaceCardList;
+// thin model declaration like AnimationsWindowsPage. Labels are i18n() here in
+// QML (not derived in C++), matching the animation page models.
 //
-// An "All windows" parent-node card (path "window") sits above the three
-// placement-state cards (window.tiled / window.snapped / window.floating);
-// an override on it cascades to every state via the DecorationProfileTree
-// walk-up, and each state inherits global → "All windows" unless it defines
-// its own override. Title bars are a window concept, so every window card
-// exposes the hide-title-bar toggle.
+// "All Windows" (path "window") is the alwaysEnabled root that carries the
+// window decoration default; an override on a child placement-state card
+// (window.tiled / window.snapped / window.floating) diverges from it via the
+// DecorationProfileTree walk-up. Title bars are a window concept, so every
+// window card exposes the hide-title-bar toggle.
 DecorationSurfaceCardList {
     Accessible.name: i18n("Window decoration surfaces")
-    headerText: i18n("Decoration overrides for windows. \"All windows\" applies to every placement state; each state can override it. Without an override, a state inherits its parents up to the global defaults.")
+    headerText: i18n("Decoration for windows. \"All Windows\" is the default; each placement state can override it.")
     surfaceModel: [
         {
             "surfacePath": "window",
+            "cardLabel": i18n("All Windows"),
+            "alwaysEnabled": true,
             "isParentNode": true,
             "showTitlebarToggle": true
         },
         {
             "surfacePath": "window.tiled",
+            "cardLabel": i18n("Tiled"),
+            "alwaysEnabled": false,
             "isParentNode": false,
             "showTitlebarToggle": true
         },
         {
             "surfacePath": "window.snapped",
+            "cardLabel": i18n("Snapped"),
+            "alwaysEnabled": false,
             "isParentNode": false,
             "showTitlebarToggle": true
         },
         {
             "surfacePath": "window.floating",
+            "cardLabel": i18n("Floating"),
+            "alwaysEnabled": false,
             "isParentNode": false,
             "showTitlebarToggle": true
         }

@@ -98,10 +98,6 @@ public:
 
     // ── Surface taxonomy ──────────────────────────────────────────────────
 
-    /// Title-cased human label for @p path's last segment (e.g.
-    /// `"popup.snapAssist"` → `"Snap Assist"`). Empty path → "Global".
-    Q_INVOKABLE QString surfaceLabel(const QString& path) const;
-
     /// Inheritance chain from @p path up to (but excluding) the empty
     /// baseline. e.g. `parentChain("window.tiled")` == `["window.tiled",
     /// "window"]`. Drives the "inheriting from" breadcrumb.

@@ -108,9 +108,8 @@ set(plasmazones_settings_SRCS
     # mutations write straight to the Settings decorationProfileTree.
     decorationpagecontroller.h
     decorationpagecontroller.cpp
-    # Surface-taxonomy helpers (surfaceLabel / parentChain) split into a
-    # sibling TU to keep the main controller TU under the 800-line cap. Same
-    # class, separate TU, no API change.
+    # Surface-taxonomy helper (parentChain) split into a sibling TU to keep
+    # the main controller TU under the 800-line cap. Same class, separate TU.
     decorationpagecontroller_paths.cpp
     # Internal header carrying the inline effect/parameter/profile→QVariantMap
     # helpers shared between the two DecorationPageController TUs.
@@ -330,7 +329,6 @@ qt_add_qml_module(plasmazones-settings
         # per-surface override cards (Windows / OSDs / Popups), each driving
         # a ChainEditor (ordered decoration-pack list with per-pack params)
         # and border/titlebar field overrides via DecorationPageController.
-        qml/DecorationGeneralPage.qml
         qml/DecorationWindowsPage.qml
         qml/DecorationOsdsPage.qml
         qml/DecorationPopupsPage.qml

@@ -108,14 +108,14 @@ void SettingsController::buildApplicationController()
     // have, but without claiming a sidebar/registry id of its own.
     m_app->registerDomain(m_animationsPage);
     // Decoration — a no-QML drill-down parent in the per-feature block.
-    // PER-SURFACE scope: per-surface CHAINS of decoration shader packs plus
-    // the global border/titlebar defaults, all resolved through a
-    // DecorationProfileTree (baseline + walk-up inheritance). Mirrors the
-    // "animations" drill-down: the nav handle ("decoration", redirected to
-    // "decoration-general") is a virtual node; the DecorationPageController
-    // is wired in as a headless staging domain below. It has no per-page
-    // staged state — dirty tracking rides the global
-    // decorationProfileTreeChanged NOTIFY loop like the General page.
+    // PER-SURFACE scope: per-surface CHAINS of decoration shader packs,
+    // resolved through a DecorationProfileTree (walk-up inheritance). Each
+    // surface family (window / popup) is its own alwaysEnabled root — there is
+    // no global "General" decoration default, so unlike "animations" the nav
+    // handle ("decoration", redirected to its first surface page) fans straight
+    // out to Windows / OSDs / Popups. The DecorationPageController is wired in
+    // as a headless staging domain below; it has no per-page staged state —
+    // dirty tracking rides the global decorationProfileTreeChanged NOTIFY loop.
     regVirtual(QStringLiteral("decoration"), QString(), PhosphorI18n::tr("Decoration"), QString(),
                QStringLiteral("preferences-desktop-theme"));
     // Headless staging domain — trackDomain() connects dirtyChanged + appends
@@ -261,20 +261,18 @@ void SettingsController::buildApplicationController()
     regVirtual(QStringLiteral("animations-shaders"), QStringLiteral("animations-library"), PhosphorI18n::tr("Shaders"),
                QStringLiteral("AnimationsShadersPage.qml"), QStringLiteral("preferences-desktop-display"));
 
-    // Decoration children — General (global baseline defaults) + Surfaces
-    // (per-surface override cards). Mirrors the animations General + Surfaces
-    // structure: General leads as the landing page (divider after it), then a
-    // collapsible Surfaces category fans out to Windows / OSDs / Popups.
-    regVirtual(QStringLiteral("decoration-general"), QStringLiteral("decoration"), PhosphorI18n::tr("General"),
-               QStringLiteral("DecorationGeneralPage.qml"), QStringLiteral("configure"), /*collapsible=*/false,
-               /*divider=*/true);
-    regVirtual(QStringLiteral("decoration-surfaces"), QStringLiteral("decoration"), PhosphorI18n::tr("Surfaces"),
-               QString(), QStringLiteral("preferences-desktop-multimedia"), /*collapsible=*/true);
-    regVirtual(QStringLiteral("decoration-windows"), QStringLiteral("decoration-surfaces"), PhosphorI18n::tr("Windows"),
+    // Decoration children — per-surface override pages directly under the
+    // "decoration" parent (Windows / OSDs / Popups). Unlike animations there is
+    // NO General page: decoration has no meaningful global default (borders and
+    // title bars are window-only; daemon surfaces default to no decoration), so
+    // each surface family is its own alwaysEnabled root. With no General /
+    // Library siblings there is no "Surfaces" sub-bucket either — the pages hang
+    // directly off "decoration".
+    regVirtual(QStringLiteral("decoration-windows"), QStringLiteral("decoration"), PhosphorI18n::tr("Windows"),
                QStringLiteral("DecorationWindowsPage.qml"), QStringLiteral("window-new"));
-    regVirtual(QStringLiteral("decoration-osds"), QStringLiteral("decoration-surfaces"), PhosphorI18n::tr("OSDs"),
+    regVirtual(QStringLiteral("decoration-osds"), QStringLiteral("decoration"), PhosphorI18n::tr("OSDs"),
                QStringLiteral("DecorationOsdsPage.qml"), QStringLiteral("dialog-information"));
-    regVirtual(QStringLiteral("decoration-popups"), QStringLiteral("decoration-surfaces"), PhosphorI18n::tr("Popups"),
+    regVirtual(QStringLiteral("decoration-popups"), QStringLiteral("decoration"), PhosphorI18n::tr("Popups"),
                QStringLiteral("DecorationPopupsPage.qml"), QStringLiteral("view-presentation"));
 
     // Bridge SettingsController.save/load to the framework's Apply/Cancel
@@ -396,8 +394,7 @@ const QHash<QString, QString>& SettingsController::parentPageRedirects()
         {QStringLiteral("animations"), QStringLiteral("animations-general")},
         {QStringLiteral("animations-surfaces"), QStringLiteral("animations-windows")},
         {QStringLiteral("animations-library"), QStringLiteral("animations-presets")},
-        {QStringLiteral("decoration"), QStringLiteral("decoration-general")},
-        {QStringLiteral("decoration-surfaces"), QStringLiteral("decoration-windows")},
+        {QStringLiteral("decoration"), QStringLiteral("decoration-windows")},
         // The "rules" parent virtual retired when Window Rules promoted
         // to a top-level entry; no redirect needed because there is no
         // longer a parent id to land on.
@@ -454,16 +451,13 @@ const QHash<QString, QSet<QString>>& SettingsController::pageGroupChildren()
     static const QSet<QString> kAnimationsDirectChildren{QStringLiteral("animations-general")};
     static const QSet<QString> kAnimationsAllLeaves =
         kAnimationsDirectChildren + kAnimationsSurfacesChildren + kAnimationsLibraryChildren;
-    // Decoration drill-down — mirrors the animations grouping: a Surfaces
-    // sub-bucket (Windows / OSDs / Popups) plus the General leaf that hangs
-    // directly off the "decoration" parent.
-    static const QSet<QString> kDecorationSurfacesChildren{
+    // Decoration drill-down — per-surface override pages directly under the
+    // "decoration" parent (no General page, no Surfaces sub-bucket).
+    static const QSet<QString> kDecorationAllLeaves{
         QStringLiteral("decoration-windows"),
         QStringLiteral("decoration-osds"),
         QStringLiteral("decoration-popups"),
     };
-    static const QSet<QString> kDecorationDirectChildren{QStringLiteral("decoration-general")};
-    static const QSet<QString> kDecorationAllLeaves = kDecorationDirectChildren + kDecorationSurfacesChildren;
     // Mid-level *-cat collapsible category headers under the snapping /
     // tiling drill-down parents. Sidebar.qml renders these as collapsible
     // section headers; when COLLAPSED the `sidebar.trailingDelegate` in
@@ -521,7 +515,6 @@ const QHash<QString, QSet<QString>>& SettingsController::pageGroupChildren()
         {QStringLiteral("animations-surfaces"), kAnimationsSurfacesChildren},
         {QStringLiteral("animations-library"), kAnimationsLibraryChildren},
         {QStringLiteral("decoration"), kDecorationAllLeaves},
-        {QStringLiteral("decoration-surfaces"), kDecorationSurfacesChildren},
         // Top-level inline-collapsible parents must also propagate
         // dirty state from their leaves — without these entries the
         // sidebar's collapsed dirty badge stays cold even when a
@@ -559,7 +552,6 @@ const QSet<QString>& SettingsController::validPageNames()
         QStringLiteral("tiling-shortcuts"),
         QStringLiteral("snapping-ordering"),
         QStringLiteral("tiling-ordering"),
-        QStringLiteral("decoration-general"),
         QStringLiteral("decoration-windows"),
         QStringLiteral("decoration-osds"),
         QStringLiteral("decoration-popups"),

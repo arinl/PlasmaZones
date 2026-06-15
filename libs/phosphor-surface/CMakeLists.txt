@@ -73,6 +73,7 @@ set_property(DIRECTORY APPEND PROPERTY COMPILE_OPTIONS "-Wno-missing-include-dir
 set(phosphorsurface_public_HDRS
     include/PhosphorSurface/SurfaceShaderContract.h
     include/PhosphorSurface/SurfaceShaderUniforms.h
+    include/PhosphorSurface/SurfaceUniformProfile.h
     include/PhosphorSurface/SurfaceShaderEffect.h
     include/PhosphorSurface/SurfaceShaderRegistry.h
     include/PhosphorSurface/DecorationProfile.h
@@ -85,6 +86,7 @@ set(phosphorsurface_public_HDRS
 # ===============================================================================
 
 set(phosphorsurface_SRCS
+    src/surfaceuniformprofile.cpp
     src/surfaceshadereffect.cpp
     src/surfaceshaderregistry.cpp
     src/decorationprofile.cpp
@@ -143,6 +145,17 @@ set_target_properties(PhosphorSurface PROPERTIES
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
 )
+
+# ===============================================================================
+# Tests
+# ===============================================================================
+
+if(CMAKE_PROJECT_NAME STREQUAL "PhosphorSurface" OR BUILD_TESTING)
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt)
+        enable_testing()
+        add_subdirectory(tests)
+    endif()
+endif()
 
 # ===============================================================================
 # Install

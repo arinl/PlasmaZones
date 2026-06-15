@@ -41,13 +41,6 @@ DecorationSurfaceCardList {
             "alwaysEnabled": false,
             "isParentNode": false,
             "showTitlebarToggle": false
-        },
-        {
-            "surfacePath": "overlay",
-            "cardLabel": i18n("Zone Overlay"),
-            "alwaysEnabled": true,
-            "isParentNode": false,
-            "showTitlebarToggle": false
         }
     ]
 }

@@ -11,9 +11,12 @@ namespace PhosphorSurfaceShaders {
 
 /// Leaf surface paths a per-surface decoration profile actually resolves
 /// against. Each names a concrete surface the shell decorates: the three
-/// window placement states (tiled / snapped / floating), the OSD, the
-/// three transient popups, and the zone overlay. When a future surface
-/// gains a decoration leg, append its leaf path here in lockstep.
+/// window placement states (tiled / snapped / floating), the OSD, and the
+/// three transient popups. (The zone overlay is intentionally NOT a
+/// decoration target — it is a fullscreen, mostly-transparent zone canvas
+/// drawn by the separate overlay shader category, not a card to round/border.)
+/// When a future surface gains a decoration leg, append its leaf path here in
+/// lockstep.
 ///
 /// Mirror of `PlasmaZones::shaderConsumedLeafEventPaths()` for the
 /// decoration concern: the SSOT for "which surfaces can carry a
@@ -32,8 +35,6 @@ inline QStringList decorationLeafSurfacePaths()
         QStringLiteral("popup.snapAssist"),
         QStringLiteral("popup.zoneSelector"),
         QStringLiteral("popup.layoutPicker"),
-        // overlay — the runtime zone overlay surface.
-        QStringLiteral("overlay"),
     };
 }
 

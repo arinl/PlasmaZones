@@ -79,11 +79,14 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChain(ShaderTransition& transit
     }
 
     // Layer 0: border. Mirror reconcileBorderShader's "wants border" gate — a
-    // window with no valid border has no active surface layers, so the caller
-    // animates the bare uTexture0 with zero FBO overhead.
+    // window with no surface decoration has no active surface layers, so the
+    // caller animates the bare uTexture0 with zero FBO overhead. The presence of
+    // a WindowBorder entry IS the gate now: updateWindowBorder only inserts one
+    // for a member window whose resolved profile declares a non-empty pack chain
+    // (border appearance is the pack's own params, not a host width/colour here).
     const QString windowId = getWindowId(w);
     const auto bit = m_windowBorders.constFind(windowId);
-    const bool wantsBorder = bit != m_windowBorders.constEnd() && bit->width > 0 && bit->color.isValid();
+    const bool wantsBorder = bit != m_windowBorders.constEnd();
     if (!wantsBorder) {
         return nullptr;
     }
@@ -164,7 +167,7 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChain(ShaderTransition& transit
         // uniforms persist into the draw — identical to the passive drawWindow
         // path. The binder is held across effects->drawWindow.
         KWin::ShaderBinder binder(border);
-        pushBorderUniforms(w, *pack, *bit, captureScale);
+        pushBorderUniforms(w, *pack, captureScale);
         // Route through effects->drawWindow (not OffscreenEffect::drawWindow) so
         // KWin's draw-chain iterator is advanced past us before OffscreenData's
         // internal capture re-enters the chain — same rationale as the on-screen

@@ -824,24 +824,30 @@ public:
 
     /// Default DecorationProfileTree — the fallback the typed
     /// `Settings::decorationProfileTree()` returns when the Surface group holds
-    /// no `DecorationProfileTree` entry. Assembled from TODAY's per-field
-    /// defaults so a fresh config renders identically to the pre-tree
-    /// border/shader settings: a single `border` pack in the baseline chain,
-    /// border width/radius/show/hide-titlebar from DecorationDefaults, and the
-    /// active/inactive/use-system colors from the autotile border defaults.
-    /// Every field is engaged (no inherit) so the baseline is a complete,
-    /// self-contained decoration profile.
+    /// no `DecorationProfileTree` entry. Assembled from TODAY's defaults so a
+    /// fresh config renders identically to the pre-tree border/shader settings:
+    /// a single `border` pack in the baseline chain, hide-titlebar from
+    /// DecorationDefaults, and the border appearance carried as the `border`
+    /// pack's PARAMETERS (the pack reads p_borderWidth/p_cornerRadius/
+    /// p_activeColor/p_inactiveColor/p_useSystemAccent from these). Param ids
+    /// match data/surface/border/metadata.json exactly. Every field is engaged
+    /// (no inherit) so the baseline is a complete, self-contained profile.
     static ::PhosphorSurfaceShaders::DecorationProfileTree decorationProfileTree()
     {
         ::PhosphorSurfaceShaders::DecorationProfile baseline;
         baseline.chain = QStringList{surfaceShaderEffectId()};
-        baseline.borderWidth = ::PhosphorCompositor::DecorationDefaults::BorderWidth;
-        baseline.borderRadius = ::PhosphorCompositor::DecorationDefaults::BorderRadius;
-        baseline.showBorder = ::PhosphorCompositor::DecorationDefaults::ShowBorder;
         baseline.hideTitlebar = ::PhosphorCompositor::DecorationDefaults::HideTitleBars;
-        baseline.useSystemColors = autotileUseSystemBorderColors();
-        baseline.activeColor = autotileBorderColor();
-        baseline.inactiveColor = autotileInactiveBorderColor();
+
+        QVariantMap borderParams;
+        borderParams.insert(QStringLiteral("borderWidth"), ::PhosphorCompositor::DecorationDefaults::BorderWidth);
+        borderParams.insert(QStringLiteral("cornerRadius"), ::PhosphorCompositor::DecorationDefaults::BorderRadius);
+        borderParams.insert(QStringLiteral("useSystemAccent"), true);
+        borderParams.insert(QStringLiteral("activeColor"), autotileBorderColor().name(QColor::HexArgb));
+        borderParams.insert(QStringLiteral("inactiveColor"), autotileInactiveBorderColor().name(QColor::HexArgb));
+
+        QVariantMap params;
+        params.insert(surfaceShaderEffectId(), borderParams);
+        baseline.parameters = params;
 
         ::PhosphorSurfaceShaders::DecorationProfileTree tree;
         tree.setBaseline(baseline);

@@ -87,16 +87,18 @@ namespace PhosphorSurfaceShaders {
 ///     change frame to frame: `uTexture0` (the live captured surface),
 ///     `uSurfaceSize` (texture size in device px), `uSurfaceFrameTopLeft`
 ///     / `uSurfaceFrameSize` (the content/frame rect within the texture,
-///     which shifts as the window moves/resizes), and `uSurfaceFocused`
-///     (focus toggles independently of any redraw).
+///     which shifts as the window moves/resizes), `uSurfaceScale` (the
+///     logical-to-device pixel scale, which changes when the window moves
+///     to a differently-scaled output), and `uSurfaceFocused` (focus
+///     toggles independently of any redraw).
 ///
-///   • **Host-resolved** — computed host-side once per relevant state
-///     change and pushed alongside the per-frame set: `uSurfaceColor`
-///     (the border colour with focus already applied — the shader never
-///     re-derives focused-vs-unfocused colour), `uSurfaceRadius` (outer
-///     corner radius), and `uSurfaceBorderWidth` (decoration band
-///     thickness). These come from settings / window-rule resolution and
-///     only move when the user changes a setting or the rule set.
+/// Decoration APPEARANCE — border width, corner radius, colours, glow,
+/// etc. — is NOT host state. It is each pack's own declared PARAMETERS
+/// (`customParams` / `customColors`), so the host pushes only the surface
+/// geometry, the logical-to-device scale, and the focus flag; the pack's
+/// `effect.frag` reads its appearance from its parameter slots (e.g. the
+/// border pack mixes `p_inactiveColor`/`p_activeColor` on `uSurfaceFocused`
+/// and scales `p_borderWidth`/`p_cornerRadius` by `uSurfaceScale`).
 namespace SurfaceShaderContract {
 
 /// `sampler2D uTexture0` — the live captured surface. Compositor path:
@@ -134,44 +136,25 @@ inline constexpr const char* kUSurfaceFrameTopLeft = "uSurfaceFrameTopLeft";
 /// `uSurfaceSize` texture extent.
 inline constexpr const char* kUSurfaceFrameSize = "uSurfaceFrameSize";
 
-/// `float uSurfaceRadius` — the outer corner radius, in device pixels.
-/// The radius of the window frame's rounded corners that rounded-corner
-/// / border shaders clip against. Host-resolved: derived from settings /
-/// window-rule resolution and only changes when the user adjusts the
-/// corner-radius setting (not per-frame), but is pushed alongside the
-/// per-frame set for a single uniform-upload path.
-inline constexpr const char* kUSurfaceRadius = "uSurfaceRadius";
-
-/// `float uSurfaceBorderWidth` — the decoration band thickness, in
-/// device pixels. The width of the border the surface shader draws
-/// inset from the frame edge (the frame's rounded corners are measured
-/// by `uSurfaceRadius`). Host-resolved: comes from the border-width
-/// setting / window rule and moves only on a settings change, but is
-/// pushed every frame for upload-path uniformity.
-inline constexpr const char* kUSurfaceBorderWidth = "uSurfaceBorderWidth";
-
-/// `vec4 uSurfaceColor` — the border colour as STRAIGHT (non-
-/// premultiplied) RGBA, host-resolved with focus already applied. The
-/// host picks the focused vs unfocused colour from settings / window-
-/// rule resolution and resolves it into this single uniform BEFORE
-/// upload, so the shader never re-derives a focus-conditional colour —
-/// it composites `uSurfaceColor` verbatim. Components are `QColor`'s
-/// `redF/greenF/blueF/alphaF`, so a 50%-alpha colour arrives as
-/// `(r, g, b, 0.5)` with un-multiplied RGB; authors premultiply manually
-/// if their composite math expects it. Host-resolved but pushed every
-/// frame (focus state and the resolved colour can change between paints).
-inline constexpr const char* kUSurfaceColor = "uSurfaceColor";
+/// `float uSurfaceScale` — the logical-to-device pixel scale of the
+/// output the surface is on. A pack declares its appearance lengths
+/// (border width, corner radius, …) in LOGICAL pixels and multiplies
+/// them by this to reach the device-pixel space the geometry uniforms
+/// (`uSurfaceSize` / `uSurfaceFrameTopLeft` / `uSurfaceFrameSize`) are
+/// expressed in. Per-frame-dynamic: pushed every paint so a window that
+/// moves to a differently-scaled output picks up the new scale without
+/// any per-window state-change bookkeeping.
+inline constexpr const char* kUSurfaceScale = "uSurfaceScale";
 
 /// `float uSurfaceFocused` — `1.0` when the window owning this surface
-/// is focused, `0.0` otherwise. The focused colour is ALREADY folded
-/// into `uSurfaceColor` host-side, so most shaders never need this — it
-/// is exposed for effects that want a secondary focus-conditional
-/// behaviour (e.g. a focus-only glow pulse) beyond the resolved colour.
-/// Per-frame-dynamic: focus toggles independently of window content, so
-/// this is re-pushed every paint. Authoring rule: treat any value `>=
-/// 0.5` as focused rather than testing `== 1.0`, so a future runtime
-/// that elects to ramp this for a focus-fade transition degrades
-/// gracefully.
+/// is focused, `0.0` otherwise. A pack with active/inactive appearance
+/// (e.g. the border's `p_activeColor` / `p_inactiveColor`) mixes its own
+/// parameters on this flag rather than the host pre-resolving a single
+/// focus-applied value. Per-frame-dynamic: focus toggles independently
+/// of window content, so this is re-pushed every paint. Authoring rule:
+/// treat any value `>= 0.5` as focused rather than testing `== 1.0`, so
+/// a future runtime that elects to ramp this for a focus-fade transition
+/// degrades gracefully.
 inline constexpr const char* kUSurfaceFocused = "uSurfaceFocused";
 
 /// `vec4 customParams[N]` — per-effect declared parameter slots.

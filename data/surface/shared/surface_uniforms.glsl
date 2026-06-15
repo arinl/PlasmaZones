@@ -22,11 +22,14 @@
 //     wired in a follow-up pass; the branch is authored here so packs compile
 //     for both runtimes from day one and need no edits when the daemon lands.)
 //
-// All length uniforms are DEVICE pixels. The host (compositor or daemon)
-// resolves the decoration STATE — geometry from the surface, and radius / width
-// / colour / focus from its own settings (the compositor feeds the tiling
-// BorderState, focus-resolved) — and the pack only consumes it. Pack-specific
-// tweakables ride customParams / customColors via the standard parameter slots.
+// The host (compositor or daemon) provides only the surface GEOMETRY (the
+// content rect within the texture, in device px), a logical-to-device SCALE, and
+// a FOCUS flag. Decoration APPEARANCE — border width, corner radius, colours,
+// glow, etc. — is NOT host state: it is each pack's own declared PARAMETERS
+// (customParams / customColors via the standard parameter slots), so "border" is
+// just a shader whose width/radius/colour are its params, not a separately
+// defined concept. Lengths a pack declares are LOGICAL px; multiply by
+// uSurfaceScale to reach the device-px space the geometry uniforms use.
 
 #ifndef PLASMAZONES_SURFACE_UNIFORMS_GLSL
 #define PLASMAZONES_SURFACE_UNIFORMS_GLSL
@@ -47,11 +50,13 @@ uniform vec2 uSurfaceSize;
 uniform vec2 uSurfaceFrameTopLeft;
 uniform vec2 uSurfaceFrameSize;
 
-// Host-resolved decoration state.
-uniform float uSurfaceRadius;       // outer corner radius (content radius + width)
-uniform float uSurfaceBorderWidth;  // decoration band thickness
-uniform vec4 uSurfaceColor;         // straight (non-premultiplied) RGBA, focus-resolved
-uniform float uSurfaceFocused;      // 1.0 when the surface is focused/active, else 0.0
+// Logical-to-device scale: multiply a pack's logical-px parameter (e.g. a
+// border width or corner radius) by this to reach the device-px space the
+// geometry uniforms above are in.
+uniform float uSurfaceScale;
+// 1.0 when the surface is focused/active, else 0.0. A pack with active/inactive
+// colour params mixes them on this rather than the host picking one.
+uniform float uSurfaceFocused;
 
 // Pack-specific tweakable parameters (declared in metadata.json, addressed by
 // `#define p_<id> customParamsN_x` / `customColorN` preambles the registry
@@ -81,18 +86,17 @@ uniform vec4 iChannelResolution[4];
 layout(std140, binding = 0) uniform SurfaceUniforms {
     mat4 qt_Matrix;              // offset 0   (64)
     float qt_Opacity;            // offset 64  (4)
-    float uSurfaceRadius;        // offset 68  (4)
-    float uSurfaceBorderWidth;   // offset 72  (4)
-    float uSurfaceFocused;       // offset 76  (4)
+    float uSurfaceScale;         // offset 68  (4)
+    float uSurfaceFocused;       // offset 72  (4)
+    // implicit 4-byte std140 pad (76 → 80) before the vec2 pair
     vec2 uSurfaceSize;           // offset 80  (8)
     vec2 uSurfaceFrameTopLeft;   // offset 88  (8)
     vec2 uSurfaceFrameSize;      // offset 96  (8)
-    // implicit 8-byte std140 pad (96+8=104 → 112) before the next vec4
-    vec4 uSurfaceColor;          // offset 112 (16)
-    vec4 customParams[8];        // offset 128 (128)
-    vec4 customColors[16];       // offset 256 (256)
-    vec4 iChannelResolution[4];  // offset 512 (64) — multipass buffer sizes (.xy)
-};                               // total 576 bytes
+    // implicit 8-byte std140 pad (104 → 112) before the next vec4
+    vec4 customParams[8];        // offset 112 (128)
+    vec4 customColors[16];       // offset 240 (256)
+    vec4 iChannelResolution[4];  // offset 496 (64) — multipass buffer sizes (.xy)
+};                               // total 560 bytes
 
 layout(binding = 7) uniform sampler2D uTexture0;
 

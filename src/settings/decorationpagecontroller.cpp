@@ -13,7 +13,6 @@
 #include <PhosphorSurface/SurfaceShaderEffect.h>
 #include <PhosphorSurface/SurfaceShaderRegistry.h>
 
-#include <QColor>
 #include <QLatin1String>
 
 namespace PlasmaZones {
@@ -189,70 +188,18 @@ void DecorationPageController::clearChainParams(const QString& path)
     writeDirectProfile(m_settings, tree, path, profile);
 }
 
-// ── Border/titlebar field mutators ────────────────────────────────────────────
+// ── Titlebar field mutator ────────────────────────────────────────────────────
 
-void DecorationPageController::setBorderField(const QString& path, const QString& fieldName, const QVariant& value)
+void DecorationPageController::setHideTitlebar(const QString& path, bool hide)
 {
-    if (!m_settings || fieldName.isEmpty())
+    if (!m_settings)
         return;
     if (!path.isEmpty() && !PhosphorSurfaceShaders::decorationSurfaceSupported(path))
         return;
-    using DP = DecorationProfile;
     DecorationProfileTree tree = readTree(m_settings);
     DecorationProfile profile = directProfileAt(tree, path);
-
-    bool engaged = true;
-    if (fieldName == QLatin1String(DP::JsonFieldBorderWidth))
-        profile.borderWidth = value.toInt();
-    else if (fieldName == QLatin1String(DP::JsonFieldBorderRadius))
-        profile.borderRadius = value.toInt();
-    else if (fieldName == QLatin1String(DP::JsonFieldActiveColor))
-        profile.activeColor = value.value<QColor>();
-    else if (fieldName == QLatin1String(DP::JsonFieldInactiveColor))
-        profile.inactiveColor = value.value<QColor>();
-    else if (fieldName == QLatin1String(DP::JsonFieldUseSystemColors))
-        profile.useSystemColors = value.toBool();
-    else if (fieldName == QLatin1String(DP::JsonFieldShowBorder))
-        profile.showBorder = value.toBool();
-    else if (fieldName == QLatin1String(DP::JsonFieldHideTitlebar))
-        profile.hideTitlebar = value.toBool();
-    else
-        engaged = false; // unknown field — ignore
-
-    if (engaged)
-        writeDirectProfile(m_settings, tree, path, profile);
-}
-
-void DecorationPageController::clearBorderField(const QString& path, const QString& fieldName)
-{
-    if (!m_settings || fieldName.isEmpty())
-        return;
-    if (!path.isEmpty() && !PhosphorSurfaceShaders::decorationSurfaceSupported(path))
-        return;
-    using DP = DecorationProfile;
-    DecorationProfileTree tree = readTree(m_settings);
-    DecorationProfile profile = directProfileAt(tree, path);
-
-    bool known = true;
-    if (fieldName == QLatin1String(DP::JsonFieldBorderWidth))
-        profile.borderWidth.reset();
-    else if (fieldName == QLatin1String(DP::JsonFieldBorderRadius))
-        profile.borderRadius.reset();
-    else if (fieldName == QLatin1String(DP::JsonFieldActiveColor))
-        profile.activeColor.reset();
-    else if (fieldName == QLatin1String(DP::JsonFieldInactiveColor))
-        profile.inactiveColor.reset();
-    else if (fieldName == QLatin1String(DP::JsonFieldUseSystemColors))
-        profile.useSystemColors.reset();
-    else if (fieldName == QLatin1String(DP::JsonFieldShowBorder))
-        profile.showBorder.reset();
-    else if (fieldName == QLatin1String(DP::JsonFieldHideTitlebar))
-        profile.hideTitlebar.reset();
-    else
-        known = false;
-
-    if (known)
-        writeDirectProfile(m_settings, tree, path, profile);
+    profile.hideTitlebar = hide;
+    writeDirectProfile(m_settings, tree, path, profile);
 }
 
 // ── Whole-override mutator ────────────────────────────────────────────────────

@@ -1984,9 +1984,8 @@ CompiledSurfacePack* PlasmaZonesEffect::compiledPack(const QString& packId,
     packState.uSurfaceSizeLoc = shader->uniformLocation(SC::kUSurfaceSize);
     packState.uFrameTopLeftLoc = shader->uniformLocation(SC::kUSurfaceFrameTopLeft);
     packState.uFrameSizeLoc = shader->uniformLocation(SC::kUSurfaceFrameSize);
-    packState.uRadiusLoc = shader->uniformLocation(SC::kUSurfaceRadius);
-    packState.uBorderWidthLoc = shader->uniformLocation(SC::kUSurfaceBorderWidth);
-    packState.uColorLoc = shader->uniformLocation(SC::kUSurfaceColor);
+    packState.uScaleLoc = shader->uniformLocation(SC::kUSurfaceScale);
+    packState.uFocusedLoc = shader->uniformLocation(SC::kUSurfaceFocused);
 
     // MAIN-pass multipass channel locations: the buffer-pass outputs are bound
     // here (idle drawWindow path) as iChannel0..3 so the main effect.frag can

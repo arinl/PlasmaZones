@@ -8,10 +8,12 @@ import org.kde.kirigami as Kirigami
 /**
  * @brief Decoration → Surfaces → Windows.
  *
- * Per-surface override cards for the three window placement states
- * (window.tiled / window.snapped / window.floating). Each card inherits
- * from the global Decoration → General baseline unless it defines its own
- * override.
+ * An "All windows" category card (path "window") sits above the three
+ * window placement-state cards (window.tiled / window.snapped /
+ * window.floating). Setting an override on "All windows" cascades to every
+ * placement state via the DecorationProfileTree walk-up; each placement
+ * state inherits global → "All windows" unless it defines its own override.
+ * Mirrors AnimationsWindowsPage's parent-node + per-leaf layout.
  */
 SettingsFlickable {
     id: page
@@ -28,7 +30,15 @@ SettingsFlickable {
         Kirigami.InlineMessage {
             Layout.fillWidth: true
             type: Kirigami.MessageType.Information
-            text: i18n("Decoration overrides for each window placement state. Without an override, a state inherits the global decoration defaults.")
+            text: i18n("Decoration overrides for windows. \"All windows\" applies to every placement state; each state can override it. Without an override, a state inherits its parents up to the global defaults.")
+        }
+
+        // ── "All windows" parent-node card (path "window") ───────────────
+        DecorationSurfaceCard {
+            Layout.fillWidth: true
+            surfacePath: "window"
+            isParentNode: true
+            collapsible: true
         }
 
         Repeater {

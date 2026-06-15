@@ -87,9 +87,8 @@ struct CompiledSurfacePack
     int uSurfaceSizeLoc = -1; ///< uSurfaceSize — uTexture0 extent, device px
     int uFrameTopLeftLoc = -1; ///< uSurfaceFrameTopLeft — frame top-left within the texture, device px
     int uFrameSizeLoc = -1; ///< uSurfaceFrameSize — frame size excluding shadows, device px
-    int uRadiusLoc = -1; ///< uSurfaceRadius — outer corner radius, device px
-    int uBorderWidthLoc = -1; ///< uSurfaceBorderWidth — decoration band thickness, device px
-    int uColorLoc = -1; ///< uSurfaceColor — resolved decoration colour (straight RGBA)
+    int uScaleLoc = -1; ///< uSurfaceScale — logical-to-device pixel scale
+    int uFocusedLoc = -1; ///< uSurfaceFocused — 1.0 focused / 0.0 unfocused
 
     /// MAIN-pass iChannel0..3 sampler + iChannelResolution[0..3] element
     /// locations. -1 when the linker dropped the uniform (single-pass pack).
@@ -147,24 +146,20 @@ struct SurfaceMultipassState
 /// The shader evaluates one analytic rounded-rect signed-distance field over the
 /// window FRAME and does TWO things from it, IDENTICALLY for decorated and
 /// borderless windows: it clips the window content to the INNER rounded rect
-/// (inset by the border width) and lays the outline band of `width` OVER the
-/// background just outside it — so the content sits inside the border and a
-/// translucent border blends with the desktop, not the content. It runs over the
-/// COMPOSITED redirected texture, so it rounds the outer frame corners (titlebar
-/// included) without ever clipping an individual client subsurface. No drop
-/// shadow is drawn (KWin does not render one into this texture).
+/// (inset by the border width) and lays the outline band OVER the background just
+/// outside it — so the content sits inside the border and a translucent border
+/// blends with the desktop, not the content. It runs over the COMPOSITED
+/// redirected texture, so it rounds the outer frame corners (titlebar included)
+/// without ever clipping an individual client subsurface. No drop shadow is drawn
+/// (KWin does not render one into this texture).
 ///
-/// The resolved appearance (width / radius / colour) is stored in LOGICAL
-/// pixels; pushBorderUniforms multiplies by `viewport.scale()` per frame to
-/// reach the device-pixel uniforms the shader works in.
+/// The border APPEARANCE (width / radius / colour) is no longer host state on
+/// this struct: it is the resolved pack's own declared PARAMETERS, baked into the
+/// CompiledSurfacePack's customParams/customColors at compile time and pushed by
+/// pushBorderUniforms. This struct now only records WHICH pack chain renders and
+/// the per-window hide-titlebar choice; the appearance lives with the pack.
 struct WindowBorder
 {
-    /// Resolved border appearance in LOGICAL pixels (the paint path multiplies
-    /// width/radius by `viewport.scale()` to reach device px for the shader).
-    int width = 0;
-    int radius = 0;
-    QColor color;
-
     /// True when THIS border owns the window's OffscreenEffect redirect +
     /// border shader slot. False while an animation transition has taken over
     /// the slot (the animation path's begin/end coordinates the handover) —
@@ -183,6 +178,12 @@ struct WindowBorder
     /// looks this up in m_compiledPacks to get the CompiledSurfacePack instead
     /// of the old single global border shader.
     QString basePackId;
+
+    /// The resolved per-window hide-titlebar choice
+    /// (DecorationProfile::effectiveHideTitlebar()). Recorded here so the
+    /// decoration-restore veto can re-source it from the resolved tree instead
+    /// of the legacy per-mode borderState().hideTitleBars flag.
+    bool hideTitlebar = false;
 };
 
 /// User-texture cache entry. Owns the uploaded `GLTexture` and tracks the wrap

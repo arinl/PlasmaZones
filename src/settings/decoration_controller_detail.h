@@ -14,7 +14,6 @@
 #include <PhosphorSurface/DecorationProfile.h>
 #include <PhosphorSurface/SurfaceShaderEffect.h>
 
-#include <QColor>
 #include <QLatin1Char>
 #include <QLatin1String>
 #include <QString>
@@ -74,11 +73,12 @@ inline QVariantMap effectToMap(const PhosphorSurfaceShaders::SurfaceShaderEffect
 }
 
 /// Project the ENGAGED fields of @p p into a sparse QVariantMap, mirroring
-/// `DecorationProfile::toJson()` keys but as a QVariant projection (colors
-/// as `#AARRGGBB` hex strings, chain as a QStringList, parameters as a
-/// nested QVariantMap). Only fields whose optional is engaged appear — an
-/// inherited (nullopt) field is omitted, so QML can tell "set here" from
-/// "inherited" by key presence.
+/// `DecorationProfile::toJson()` keys but as a QVariant projection (chain as
+/// a QStringList, parameters as a nested QVariantMap, hideTitlebar as a
+/// bool). Only fields whose optional is engaged appear — an inherited
+/// (nullopt) field is omitted, so QML can tell "set here" from "inherited"
+/// by key presence. Border width / radius / colour are NOT decoration fields
+/// — they live in `parameters["border"]` and ride the parameters projection.
 inline QVariantMap profileToSparseMap(const PhosphorSurfaceShaders::DecorationProfile& p)
 {
     using DP = PhosphorSurfaceShaders::DecorationProfile;
@@ -87,18 +87,6 @@ inline QVariantMap profileToSparseMap(const PhosphorSurfaceShaders::DecorationPr
         m.insert(QLatin1String(DP::JsonFieldChain), QVariant(*p.chain));
     if (p.parameters)
         m.insert(QLatin1String(DP::JsonFieldParameters), *p.parameters);
-    if (p.borderWidth)
-        m.insert(QLatin1String(DP::JsonFieldBorderWidth), *p.borderWidth);
-    if (p.borderRadius)
-        m.insert(QLatin1String(DP::JsonFieldBorderRadius), *p.borderRadius);
-    if (p.activeColor)
-        m.insert(QLatin1String(DP::JsonFieldActiveColor), p.activeColor->name(QColor::HexArgb));
-    if (p.inactiveColor)
-        m.insert(QLatin1String(DP::JsonFieldInactiveColor), p.inactiveColor->name(QColor::HexArgb));
-    if (p.useSystemColors)
-        m.insert(QLatin1String(DP::JsonFieldUseSystemColors), *p.useSystemColors);
-    if (p.showBorder)
-        m.insert(QLatin1String(DP::JsonFieldShowBorder), *p.showBorder);
     if (p.hideTitlebar)
         m.insert(QLatin1String(DP::JsonFieldHideTitlebar), *p.hideTitlebar);
     return m;

@@ -721,17 +721,19 @@ private:
     void reconcileBorderShader(const QString& windowId, KWin::EffectWindow* w);
 
     /// Per-frame uniform push for a bordered window painted through @p pack's
-    /// surface shader. Sets the geometry/appearance uniforms (windowExpandedSize,
-    /// frameTopLeft, frameSize, thickness, outlineColor) from @p border and the
-    /// window's frame/expanded geometry × @p scale, plus @p pack's resolved
-    /// customParams/customColors, on the ALREADY-BOUND pack shader — the caller
-    /// owns the KWin::ShaderBinder (bound to @p pack.shader) and routes the actual
-    /// draw through OffscreenEffect::drawWindow, whose OffscreenData::paint re-binds
-    /// the same program and runs the shader. Does NOT bind/unbind or re-validate
-    /// the window: drawWindow is the sole caller and has already resolved @p pack,
-    /// confirmed the border is applied, and ruled out a transition owning the slot.
-    void pushBorderUniforms(KWin::EffectWindow* w, const CompiledSurfacePack& pack, const WindowBorder& border,
-                            qreal scale);
+    /// surface shader. Sets the geometry uniforms (uSurfaceSize, uSurfaceFrameTopLeft,
+    /// uSurfaceFrameSize) from the window's frame/expanded geometry × @p scale, the
+    /// logical-to-device @p scale itself (uSurfaceScale), the focus flag
+    /// (uSurfaceFocused), plus @p pack's resolved customParams/customColors — which
+    /// now carry the border APPEARANCE (width / radius / colours) baked at compile
+    /// time from the pack's parameters. Writes onto the ALREADY-BOUND pack shader:
+    /// the caller owns the KWin::ShaderBinder (bound to @p pack.shader) and routes
+    /// the actual draw through OffscreenEffect::drawWindow, whose OffscreenData::paint
+    /// re-binds the same program and runs the shader. Does NOT bind/unbind or
+    /// re-validate the window: drawWindow is the sole caller and has already resolved
+    /// @p pack, confirmed the border is applied, and ruled out a transition owning
+    /// the slot.
+    void pushBorderUniforms(KWin::EffectWindow* w, const CompiledSurfacePack& pack, qreal scale);
 
     /// Render the window's active surface-layer stack into @p transition's
     /// ping-pong FBO chain and return the texture holding the final composited

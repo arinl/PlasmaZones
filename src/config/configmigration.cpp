@@ -1766,29 +1766,44 @@ void ConfigMigration::migrateV4ToV5(QJsonObject& root)
     }
 
     // Build the baseline DecorationProfile from the user's values, falling back
-    // to today's defaults for any individual key the user never set. Every
-    // field is engaged so the seeded baseline is a complete profile (matching
-    // the shape ConfigDefaults::decorationProfileTree() produces).
+    // to today's defaults for any individual key the user never set. The border
+    // appearance is NOT a set of decoration fields — width/radius/colours are
+    // the `border` pack's PARAMETERS, so they are seeded into
+    // parameters["border"] under the param ids the pack declares in
+    // data/surface/border/metadata.json (borderWidth, cornerRadius,
+    // useSystemAccent, activeColor, inactiveColor). Every field is engaged so
+    // the seeded baseline is a complete profile (matching the shape
+    // ConfigDefaults::decorationProfileTree() produces).
     PhosphorSurfaceShaders::DecorationProfile baseline;
 
     const QString shaderId = haveShaderId ? surface.value(ConfigDefaults::surfaceShaderEffectIdKey()).toString()
                                           : ConfigDefaults::surfaceShaderEffectId();
     baseline.chain = QStringList{shaderId.isEmpty() ? ConfigDefaults::surfaceShaderEffectId() : shaderId};
 
-    baseline.borderWidth =
-        haveWidth ? borders.value(ConfigDefaults::widthKey()).toInt() : ConfigDefaults::autotileBorderWidth();
-    baseline.borderRadius =
-        haveRadius ? borders.value(ConfigDefaults::radiusKey()).toInt() : ConfigDefaults::autotileBorderRadius();
-    baseline.showBorder =
-        haveShowBorder ? borders.value(ConfigDefaults::showBorderKey()).toBool() : ConfigDefaults::autotileShowBorder();
     baseline.hideTitlebar = haveHideTitle ? decorations.value(ConfigDefaults::hideTitleBarsKey()).toBool()
                                           : ConfigDefaults::autotileHideTitleBars();
-    baseline.useSystemColors = haveUseSystem ? colors.value(ConfigDefaults::useSystemKey()).toBool()
-                                             : ConfigDefaults::autotileUseSystemBorderColors();
-    baseline.activeColor = haveActive ? QColor(colors.value(ConfigDefaults::activeKey()).toString())
-                                      : ConfigDefaults::autotileBorderColor();
-    baseline.inactiveColor = haveInactive ? QColor(colors.value(ConfigDefaults::inactiveKey()).toString())
-                                          : ConfigDefaults::autotileInactiveBorderColor();
+
+    const int borderWidth =
+        haveWidth ? borders.value(ConfigDefaults::widthKey()).toInt() : ConfigDefaults::autotileBorderWidth();
+    const int cornerRadius =
+        haveRadius ? borders.value(ConfigDefaults::radiusKey()).toInt() : ConfigDefaults::autotileBorderRadius();
+    const bool useSystemAccent = haveUseSystem ? colors.value(ConfigDefaults::useSystemKey()).toBool()
+                                               : ConfigDefaults::autotileUseSystemBorderColors();
+    const QColor activeColor = haveActive ? QColor(colors.value(ConfigDefaults::activeKey()).toString())
+                                          : ConfigDefaults::autotileBorderColor();
+    const QColor inactiveColor = haveInactive ? QColor(colors.value(ConfigDefaults::inactiveKey()).toString())
+                                              : ConfigDefaults::autotileInactiveBorderColor();
+
+    QVariantMap borderParams;
+    borderParams.insert(QStringLiteral("borderWidth"), borderWidth);
+    borderParams.insert(QStringLiteral("cornerRadius"), cornerRadius);
+    borderParams.insert(QStringLiteral("useSystemAccent"), useSystemAccent);
+    borderParams.insert(QStringLiteral("activeColor"), activeColor.name(QColor::HexArgb));
+    borderParams.insert(QStringLiteral("inactiveColor"), inactiveColor.name(QColor::HexArgb));
+
+    QVariantMap params;
+    params.insert(ConfigDefaults::surfaceShaderEffectId(), borderParams);
+    baseline.parameters = params;
 
     PhosphorSurfaceShaders::DecorationProfileTree tree;
     tree.setBaseline(baseline);

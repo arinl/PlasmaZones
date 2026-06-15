@@ -3,33 +3,40 @@
 
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
 /**
  * @brief Per-surface decoration override card.
  *
- * One card per leaf surface path (window.tiled, osd, popup.snapAssist, …).
- * Mirrors AnimationEventCard: an override toggle gates a per-surface
- * override in the DecorationProfileTree. When off, the card shows the
- * RESOLVED chain + border (the walk-up result) read-only, with an
- * "Inheriting from: …" breadcrumb. When on, it edits the DIRECT override at
- * this path — a ChainEditor plus border/titlebar field overrides — and
- * offers "Reset to inherited" (clearOverride).
+ * One card per surface path. Leaf paths (window.tiled, osd,
+ * popup.snapAssist, …) are concrete surfaces; CATEGORY paths (window,
+ * popup) are parent nodes whose override cascades to every descendant leaf
+ * unless that leaf has its own override. Mirrors AnimationEventCard: an
+ * override toggle gates a per-surface override in the DecorationProfileTree.
+ * When off, the card shows the RESOLVED chain (the walk-up result) read-only
+ * with an "Inheriting from: …" breadcrumb (leaf) or a parent-node banner
+ * (category). When on, it edits the DIRECT override at this path — a
+ * ChainEditor (where border width / radius / colour are the "border" pack's
+ * own inline parameters, NOT a separate appearance block) plus a single
+ * "Hide title bar" toggle — and offers "Reset to inherited" (clearOverride).
  *
  * Reactive-latch pattern: imperative refresh from the controller on
  * `profilesChanged` / `shaderEffectsChanged`, NOT function bindings that
  * re-query C++ every repaint (mirrors AnimationEventCard.refreshFromTree).
  *
  * Required properties:
- *   - surfacePath: full leaf path (e.g. "window.tiled")
+ *   - surfacePath: full path (e.g. "window.tiled" leaf, or "window" category)
+ * Optional:
+ *   - isParentNode: bool — flips the inheritance banner copy for a category
+ *     node ("All windows" / "All popups").
  */
 Item {
     id: root
 
     required property string surfacePath
     property bool collapsible: false
+    property bool isParentNode: false
 
     readonly property var bridge: settingsController.decorationPage
 
@@ -84,10 +91,8 @@ Item {
     function _resolvedSummary() {
         var c = root._resolved && root._resolved.chain ? root._resolved.chain : [];
         var packs = c.length > 0 ? root._packNames(c).join(", ") : i18n("None");
-        var bw = (root._resolved && root._resolved.borderWidth !== undefined) ? root._resolved.borderWidth : 0;
-        var show = root._resolved && root._resolved.showBorder === true;
-        var border = show ? i18n("Border %1 px", bw) : i18n("No border");
-        return i18n("Packs: %1 · %2", packs, border);
+        var titlebar = (root._resolved && root._resolved.hideTitlebar === true) ? i18n("title bar hidden") : i18n("title bar shown");
+        return i18n("Packs: %1 · %2", packs, titlebar);
     }
 
     function _packNames(ids) {
@@ -138,11 +143,18 @@ Item {
             spacing: Kirigami.Units.smallSpacing
 
             // ── Inheritance summary (override off) ────────────────────────
+            // Parent-node category cards explain the cascade when ON; leaf
+            // cards explain inheritance when OFF — same split as
+            // AnimationEventCard.
             Kirigami.InlineMessage {
                 Layout.fillWidth: true
                 type: Kirigami.MessageType.Information
-                visible: !root._hasOverride
-                text: root._parentChainText.length > 0 ? i18n("Inheriting from: %1", root._parentChainText) : i18n("Using global defaults")
+                visible: root.isParentNode ? root._hasOverride : !root._hasOverride
+                text: {
+                    if (root.isParentNode)
+                        return i18n("Settings here apply to all child surfaces unless individually overridden.");
+                    return root._parentChainText.length > 0 ? i18n("Inheriting from: %1", root._parentChainText) : i18n("Using global defaults");
+                }
             }
 
             Label {
@@ -166,6 +178,13 @@ Item {
                     font.weight: Font.DemiBold
                 }
 
+                Label {
+                    Layout.fillWidth: true
+                    text: i18n("Expand a pack to edit its settings (e.g. the Border pack's width, corner radius and colours). A surface shows a border only when the Border pack is in its chain.")
+                    wrapMode: Text.WordWrap
+                    opacity: 0.8
+                }
+
                 ChainEditor {
                     Layout.fillWidth: true
                     availableShaders: root._effects
@@ -185,100 +204,8 @@ Item {
 
                 Label {
                     Layout.fillWidth: true
-                    text: i18n("Border and titlebar")
+                    text: i18n("Title bar")
                     font.weight: Font.DemiBold
-                }
-
-                SettingsRow {
-                    title: i18n("Show border")
-                    description: i18n("Draw a border around this surface")
-
-                    SettingsSwitch {
-                        checked: root._resolved && root._resolved.showBorder === true
-                        accessibleName: i18n("Show border")
-                        onToggled: function (newValue) {
-                            if (root.bridge)
-                                root.bridge.setBorderField(root.surfacePath, "showBorder", newValue);
-                        }
-                    }
-                }
-
-                SettingsRow {
-                    title: i18n("Use system accent color")
-                    description: i18n("Derive border colors from your system color scheme")
-
-                    SettingsSwitch {
-                        id: useSystemColorsSwitch
-
-                        checked: root._resolved && root._resolved.useSystemColors === true
-                        accessibleName: i18n("Use system accent color")
-                        onToggled: function (newValue) {
-                            if (root.bridge)
-                                root.bridge.setBorderField(root.surfacePath, "useSystemColors", newValue);
-                        }
-                    }
-                }
-
-                SettingsRow {
-                    visible: !useSystemColorsSwitch.checked
-                    title: i18n("Active border color")
-                    description: i18n("Border color for the focused surface")
-
-                    ColorSwatchRow {
-                        id: activeSwatch
-
-                        color: (root._resolved && root._resolved.activeColor) ? root._resolved.activeColor : "transparent"
-                        onClicked: {
-                            activeColorDialog.selectedColor = activeSwatch.color;
-                            activeColorDialog.open();
-                        }
-                    }
-                }
-
-                SettingsRow {
-                    visible: !useSystemColorsSwitch.checked
-                    title: i18n("Inactive border color")
-                    description: i18n("Border color for the unfocused surface")
-
-                    ColorSwatchRow {
-                        id: inactiveSwatch
-
-                        color: (root._resolved && root._resolved.inactiveColor) ? root._resolved.inactiveColor : "transparent"
-                        onClicked: {
-                            inactiveColorDialog.selectedColor = inactiveSwatch.color;
-                            inactiveColorDialog.open();
-                        }
-                    }
-                }
-
-                SettingsRow {
-                    title: i18n("Border width")
-                    description: i18n("Thickness of the colored border")
-
-                    SettingsSpinBox {
-                        from: 0
-                        to: 32
-                        value: (root._resolved && root._resolved.borderWidth !== undefined) ? root._resolved.borderWidth : 0
-                        onValueModified: value => {
-                            if (root.bridge)
-                                root.bridge.setBorderField(root.surfacePath, "borderWidth", value);
-                        }
-                    }
-                }
-
-                SettingsRow {
-                    title: i18n("Corner radius")
-                    description: i18n("Roundness of border corners (0 for square)")
-
-                    SettingsSpinBox {
-                        from: 0
-                        to: 32
-                        value: (root._resolved && root._resolved.borderRadius !== undefined) ? root._resolved.borderRadius : 0
-                        onValueModified: value => {
-                            if (root.bridge)
-                                root.bridge.setBorderField(root.surfacePath, "borderRadius", value);
-                        }
-                    }
                 }
 
                 SettingsRow {
@@ -290,7 +217,7 @@ Item {
                         accessibleName: i18n("Hide title bar")
                         onToggled: function (newValue) {
                             if (root.bridge)
-                                root.bridge.setBorderField(root.surfacePath, "hideTitlebar", newValue);
+                                root.bridge.setHideTitlebar(root.surfacePath, newValue);
                         }
                     }
                 }
@@ -314,29 +241,6 @@ Item {
                     }
                 }
             }
-        }
-    }
-
-    // ── Color dialogs ────────────────────────────────────────────────────
-    ColorDialog {
-        id: activeColorDialog
-
-        options: ColorDialog.ShowAlphaChannel
-        title: i18n("Choose Active Border Color")
-        onAccepted: {
-            if (root.bridge)
-                root.bridge.setBorderField(root.surfacePath, "activeColor", selectedColor);
-        }
-    }
-
-    ColorDialog {
-        id: inactiveColorDialog
-
-        options: ColorDialog.ShowAlphaChannel
-        title: i18n("Choose Inactive Border Color")
-        onAccepted: {
-            if (root.bridge)
-                root.bridge.setBorderField(root.surfacePath, "inactiveColor", selectedColor);
         }
     }
 }

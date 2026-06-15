@@ -25,6 +25,14 @@ QString DecorationPageController::surfaceLabel(const QString& path) const
 {
     if (path.isEmpty())
         return QStringLiteral("Global");
+    // Category (parent-node) roots get an "All …" label so the parent-node
+    // cards read "All Windows" / "All Popups", mirroring the animation
+    // pages' "All Window Events" parent nodes. A dotted leaf path falls
+    // through to its humanized last segment.
+    if (path == QLatin1String("window"))
+        return QStringLiteral("All Windows");
+    if (path == QLatin1String("popup"))
+        return QStringLiteral("All Popups");
     const int dot = path.lastIndexOf(QLatin1Char('.'));
     const QString segment = dot < 0 ? path : path.mid(dot + 1);
     return decoration_controller_detail::humanizeSegment(segment);

@@ -119,9 +119,9 @@ public:
     /// tree (deeper-wins overlay), filling unset fields with library
     /// defaults so the returned map is always fully populated. For path
     /// "" returns the baseline (resolved against itself). Keys mirror
-    /// `DecorationProfile::toJson()` (chain / parameters / borderWidth /
-    /// borderRadius / activeColor / inactiveColor / useSystemColors /
-    /// showBorder / hideTitlebar).
+    /// `DecorationProfile::toJson()` (chain / parameters / hideTitlebar) —
+    /// border width / radius / colour are the "border" pack's PARAMETERS,
+    /// carried inside `parameters`, not separate decoration fields.
     Q_INVOKABLE QVariantMap resolvedProfile(const QString& path) const;
 
     /// The DIRECT override at @p path (the tree's `directOverride`), as a
@@ -157,18 +157,13 @@ public:
     /// baseline.
     Q_INVOKABLE void clearChainParams(const QString& path);
 
-    // ── Border/titlebar field mutators ────────────────────────────────────
+    // ── Titlebar field mutator ─────────────────────────────────────────────
 
-    /// Engage one border/titlebar field at @p path. @p fieldName is one of
-    /// {borderWidth, borderRadius, activeColor, inactiveColor,
-    /// useSystemColors, showBorder, hideTitlebar}. For "" edits the
-    /// baseline. Unknown @p fieldName is ignored.
-    Q_INVOKABLE void setBorderField(const QString& path, const QString& fieldName, const QVariant& value);
-
-    /// Disengage one border/titlebar field at @p path (back to inherit).
-    /// For "" this resets the baseline field to its default-constructed
-    /// nullopt — the baseline then contributes nothing for that field.
-    Q_INVOKABLE void clearBorderField(const QString& path, const QString& fieldName);
+    /// Engage the @c hideTitlebar field at @p path. This is the ONE
+    /// remaining non-shader decoration field — border width / radius /
+    /// colour are the "border" pack's parameters, edited inline in the
+    /// chain via @c setChainParam. For "" edits the baseline.
+    Q_INVOKABLE void setHideTitlebar(const QString& path, bool hide);
 
     // ── Whole-override mutator ─────────────────────────────────────────────
 

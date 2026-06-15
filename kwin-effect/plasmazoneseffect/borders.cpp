@@ -26,6 +26,8 @@
 #include <PhosphorSurface/DecorationProfileTree.h>
 
 #include <QByteArray>
+#include <QColor>
+#include <QVariantMap>
 #include <QVector2D>
 #include <QVector4D>
 
@@ -55,7 +57,15 @@ void PlasmaZonesEffect::setupDecorationManager()
         if (!w || getWindowId(w) != windowId || !m_autotileHandler->isAutotileScreen(getWindowScreenId(w))) {
             return false;
         }
-        return m_autotileHandler->borderState().hideTitleBars && !isWindowFloating(windowId);
+        // Re-source the hide-titlebar decision from the per-window resolved
+        // decoration tree (the authoritative source now that hide-titlebar is a
+        // DecorationProfile field) rather than the legacy per-mode
+        // borderState().hideTitleBars flag: resolve the window's surface path and
+        // read effectiveHideTitlebar(). Floating windows are never re-acquired by
+        // a retile, so the floating guard is retained.
+        const PhosphorSurfaceShaders::DecorationProfile profile =
+            m_decorationTree.resolve(resolveSurfacePathFor(windowId));
+        return profile.effectiveHideTitlebar() && !isWindowFloating(windowId);
     });
     connect(m_decorationManager.get(), &DecorationManager::windowDecorationRestored, this,
             [this](const QString& windowId) {
@@ -131,84 +141,47 @@ void PlasmaZonesEffect::updateWindowBorder(const QString& windowId, KWin::Effect
     // Remove existing border for this window first
     removeWindowBorder(windowId);
 
-    // MEMBERSHIP → surface path (autotile.tiled / snap.snapped / else floating),
-    // resolved INDEPENDENT of any showBorder gate. The resolved DecorationProfile
-    // for that path is now the SOLE source of border APPEARANCE (width / radius /
-    // colours / showBorder) + the surface-pack chain — the autotile/snap
-    // BorderState no longer feeds appearance (Stage 2a).
+    // MEMBERSHIP → surface path (autotile.tiled / snap.snapped / else floating).
+    // The resolved DecorationProfile for that path is the SOLE source of the
+    // surface-pack chain + the per-window hide-titlebar choice; border APPEARANCE
+    // (width / radius / colours) is no longer a host-resolved decoration field —
+    // it is the resolved pack's own PARAMETERS, baked into the CompiledSurfacePack
+    // and pushed by pushBorderUniforms. The autotile/snap BorderState feeds none
+    // of this.
     const QString surfacePath = resolveSurfacePathFor(windowId);
     const PhosphorSurfaceShaders::DecorationProfile profile = m_decorationTree.resolve(surfacePath);
-
-    // Per-window rule override — applies to ANY matched window, snapped or
-    // floating (mirrors SetOpacity). Resolved against the same evaluator the
-    // opacity / animation rules use; gated on a non-empty rule set so windows
-    // with no rules pay nothing.
-    std::optional<ResolvedWindowAppearance> ovr;
-    if (w && !m_shaderManager.animationRuleSet().isEmpty()) {
-        ovr = resolveWindowAppearance(m_shaderManager.animationRuleEvaluator(),
-                                      windowRuleQueryFor(w, getWindowScreenId(w)), windowId);
-    }
-
-    // Merge: a rule field wins; otherwise fall back to the resolved profile.
-    // showBorder is the SOLE render gate now (the legacy mode showBorder coupling
-    // was stripped from membership in resolveSurfacePathFor) — a floating window
-    // whose profile says showBorder=false shows nothing unless a rule forces it.
-    const bool show = (ovr && ovr->showBorder) ? *ovr->showBorder : profile.effectiveShowBorder();
-    if (!show) {
-        return;
-    }
-
-    const int bw = (ovr && ovr->borderWidth) ? *ovr->borderWidth : profile.effectiveBorderWidth();
-    if (bw <= 0) {
-        return;
-    }
 
     if (!w || w->isMinimized() || w->isFullScreen()) {
         return;
     }
 
-    // Choose color. The resolved profile carries separate active and inactive
-    // border colours (the daemon writes the system-resolved colours into these
-    // when useSystemColors is on, so the effect reads resolved colours and never
-    // the use-system flag — same contract as the old BorderState path). Pick the
-    // one matching the window's current focus state. A per-window SetBorderColor
-    // rule, when matched, overrides it. Focus-dependence of the RULE colour is
-    // expressed in the rule itself via the IsFocused match condition:
-    // `windowRuleQueryFor` set the query's isFocused flag, so a focus-scoped rule
-    // (`WHEN focused`/`WHEN NOT focused`) only fills the border-colour slot in its
-    // matching state, while a focus-agnostic rule applies in both. Either way
-    // `ovr->borderColor` already holds the colour appropriate to this window's
-    // current focus — no post-resolution switch. A window whose profile has no
-    // colour and whose only rule is focus-scoped thus correctly shows no border
-    // in the unmatched state; author a focus-agnostic rule to keep one in both.
-    const bool isFocused = (w == KWin::effects->activeWindow());
-    const QColor profileColor = isFocused ? profile.effectiveActiveColor() : profile.effectiveInactiveColor();
-    const QColor bc = (ovr && ovr->borderColor) ? *ovr->borderColor : profileColor;
-    if (!bc.isValid() || bc.alpha() == 0) {
+    // DECORATE GATE: a window decorates when it is a member (the isTiledWindow
+    // path that produced a non-floating surfacePath above) AND its resolved
+    // profile declares a non-empty pack chain. An explicitly-empty chain means
+    // "no decoration packs for this surface" — render nothing. The window-rule
+    // override path that used to force/suppress a border by width/colour/show is
+    // dropped (those WindowBorder fields are gone); per-window appearance rules
+    // are a follow-up that will override parameters[packId], not host fields.
+    const QStringList chain = profile.effectiveChain();
+    if (chain.isEmpty()) {
         return;
     }
 
-    const int br = (ovr && ovr->borderRadius) ? *ovr->borderRadius : profile.effectiveBorderRadius();
-
-    // Resolve the surface-pack chain + the base pack to render this stage. The
-    // full chain is stored whole so the next stage can composite chain[1..] over
-    // the base; for now ONLY chain[0] renders (base pack). Default to "border"
-    // when the profile declares an empty chain so a misconfigured/empty profile
-    // still renders the canonical decoration rather than nothing.
-    const QStringList chain = profile.effectiveChain();
+    // The base pack id to render this stage. The full chain is stored whole so the
+    // next stage can composite chain[1..] over the base; for now ONLY chain[0]
+    // renders. chain is non-empty here, so value(0) is the real entry; the
+    // "border" default is a defensive fallback only.
     const QString basePackId = chain.value(0, QStringLiteral("border"));
 
-    // Store the resolved appearance (LOGICAL pixels). pushBorderUniforms scales
-    // these by viewport.scale() per-frame to reach device px for the shader,
-    // and reads live frameGeometry()/expandedGeometry() so a resize/move needs
-    // no geometry-sync bookkeeping — the OffscreenEffect redirect already drives
-    // a fresh paint on every geometry change.
+    // Store the resolved chain + hide-titlebar choice. The appearance lives with
+    // the compiled pack (its baked customParams/customColors); pushBorderUniforms
+    // reads live frameGeometry()/expandedGeometry() + viewport.scale() per frame
+    // so a resize/move/output-scale change needs no geometry-sync bookkeeping —
+    // the OffscreenEffect redirect already drives a fresh paint on every change.
     WindowBorder wb;
-    wb.width = bw;
-    wb.radius = br;
-    wb.color = bc;
     wb.chain = chain;
     wb.basePackId = basePackId;
+    wb.hideTitlebar = profile.effectiveHideTitlebar();
 
     // Corner rounding and the outline are entirely the SHADER's job (the
     // rounded-rect SDF in the border fragment shader), identically for decorated
@@ -354,18 +327,31 @@ QString PlasmaZonesEffect::resolveSurfacePathFor(const QString& windowId) const
 void PlasmaZonesEffect::seedDecorationTreeBaseline()
 {
     // Build a baseline mirroring the daemon's ConfigDefaults::decorationProfileTree()
-    // from the SHARED DecorationDefaults constants (so the effect's pre-fetch
-    // rendering can't drift from what the daemon would persist) + the default
-    // "border" pack id. Every field is engaged so the baseline is a complete,
-    // self-contained profile. Colours are left invalid (unset → inherit-to-empty):
-    // the daemon delivers the RESOLVED active/inactive colours in the real fetch,
-    // exactly as BorderState's colours arrive invalid before the async load lands.
+    // in the NEW shape: a single "border" pack in the chain, the shared
+    // DecorationDefaults hide-titlebar constant, and the border APPEARANCE carried
+    // as the "border" pack's PARAMETERS (not host decoration fields) so the
+    // effect's pre-fetch rendering can't drift from what the daemon would persist.
+    // Border width / corner radius come from the SHARED DecorationDefaults; the
+    // active/inactive colours seed the border pack's own metadata defaults as
+    // #AARRGGBB. The daemon's real fetch overwrites this whole tree (with the
+    // system-resolved colours when useSystemAccent is on), exactly as the old
+    // pre-fetch baseline was overwritten before the async load landed; live
+    // system-accent resolution is a follow-up — useSystemAccent stays a declared
+    // param consumed later, not resolved here.
     PhosphorSurfaceShaders::DecorationProfile baseline;
     baseline.chain = QStringList{QStringLiteral("border")};
-    baseline.borderWidth = PhosphorCompositor::DecorationDefaults::BorderWidth;
-    baseline.borderRadius = PhosphorCompositor::DecorationDefaults::BorderRadius;
-    baseline.showBorder = PhosphorCompositor::DecorationDefaults::ShowBorder;
     baseline.hideTitlebar = PhosphorCompositor::DecorationDefaults::HideTitleBars;
+
+    QVariantMap borderParams;
+    borderParams.insert(QStringLiteral("borderWidth"), PhosphorCompositor::DecorationDefaults::BorderWidth);
+    borderParams.insert(QStringLiteral("cornerRadius"), PhosphorCompositor::DecorationDefaults::BorderRadius);
+    borderParams.insert(QStringLiteral("useSystemAccent"), true);
+    borderParams.insert(QStringLiteral("activeColor"), QColor(QStringLiteral("#ff3daee9")).name(QColor::HexArgb));
+    borderParams.insert(QStringLiteral("inactiveColor"), QColor(QStringLiteral("#ff5c6370")).name(QColor::HexArgb));
+
+    QVariantMap params;
+    params.insert(QStringLiteral("border"), borderParams);
+    baseline.parameters = params;
 
     PhosphorSurfaceShaders::DecorationProfileTree tree;
     tree.setBaseline(baseline);
@@ -396,7 +382,11 @@ void PlasmaZonesEffect::reconcileBorderShader(const QString& windowId, KWin::Eff
         return;
     }
     auto it = m_windowBorders.find(windowId);
-    const bool wantsBorder = (it != m_windowBorders.end()) && it->width > 0 && it->color.isValid();
+    // The presence of a WindowBorder entry IS the "wants border" gate now:
+    // updateWindowBorder only inserts one for a member window whose resolved
+    // profile declares a non-empty pack chain (border appearance moved into the
+    // pack's own params, so there is no host width/colour to test here).
+    const bool wantsBorder = (it != m_windowBorders.end());
 
     // An in-flight animation transition owns the shader slot — the transition's
     // begin already called setShader(animationShader) and redirect(). Leave it
@@ -440,19 +430,20 @@ void PlasmaZonesEffect::reconcileBorderShader(const QString& windowId, KWin::Eff
     }
 }
 
-void PlasmaZonesEffect::pushBorderUniforms(KWin::EffectWindow* w, const CompiledSurfacePack& pack,
-                                           const WindowBorder& border, qreal scale)
+void PlasmaZonesEffect::pushBorderUniforms(KWin::EffectWindow* w, const CompiledSurfacePack& pack, qreal scale)
 {
-    // drawWindow (the sole caller) has already resolved @p border + @p pack,
-    // confirmed it is applied, ruled out a transition owning the slot, and bound
+    // drawWindow (the sole caller) has already resolved @p pack, confirmed the
+    // border is applied, ruled out a transition owning the slot, and bound
     // pack.shader, so this just computes and writes the uniforms onto the bound
-    // program.
+    // program. The border APPEARANCE is no longer a parameter here — it rides the
+    // pack's baked customParams/customColors, pushed below.
     KWin::GLShader* shader = pack.shader.get();
 
     // The shader evaluates a rounded-rect SDF over the window FRAME to round the
     // corners + draw the outline. It needs the expanded (redirected) texture size
-    // for the top-down pixel reconstruction plus the frame rect placed within that
-    // texture, the outer corner radius, and the band thickness — all device px.
+    // for the top-down pixel reconstruction, the frame rect placed within that
+    // texture (device px), and the logical-to-device scale so the pack can scale
+    // its own logical-px appearance params (border width / corner radius).
     // windowExpandedSize is the redirected FBO extent in device px; expandedGeometry
     // covers frame + drop shadow (falls back to frame when empty, e.g. a shadowless
     // window). frameTopLeft = (frameGeometry.topLeft - expandedGeometry.topLeft) *
@@ -468,14 +459,6 @@ void PlasmaZonesEffect::pushBorderUniforms(KWin::EffectWindow* w, const Compiled
     const QVector2D frameTopLeft(static_cast<float>((frame.left() - expanded.left()) * scale),
                                  static_cast<float>((frame.top() - expanded.top()) * scale));
     const QVector2D frameSize(static_cast<float>(frame.width() * scale), static_cast<float>(frame.height() * scale));
-    const float thickness = static_cast<float>(border.width * scale);
-    // OUTER radius = content radius + border width, so the outline band sits inside
-    // it and the content corner ends one band-width in, at `border.radius`.
-    const float radius = static_cast<float>((border.radius + border.width) * scale);
-
-    const QColor& c = border.color;
-    const QVector4D outlineColor(static_cast<float>(c.redF()), static_cast<float>(c.greenF()),
-                                 static_cast<float>(c.blueF()), static_cast<float>(c.alphaF()));
 
     // The caller binds the border shader (a KWin::ShaderBinder kept in scope
     // through the subsequent effects->drawWindow) — setUniform writes to the
@@ -490,14 +473,14 @@ void PlasmaZonesEffect::pushBorderUniforms(KWin::EffectWindow* w, const Compiled
     if (pack.uFrameSizeLoc >= 0) {
         shader->setUniform(pack.uFrameSizeLoc, frameSize);
     }
-    if (pack.uRadiusLoc >= 0) {
-        shader->setUniform(pack.uRadiusLoc, radius);
+    // Logical-to-device scale: the pack multiplies its logical-px params by this.
+    if (pack.uScaleLoc >= 0) {
+        shader->setUniform(pack.uScaleLoc, static_cast<float>(scale));
     }
-    if (pack.uBorderWidthLoc >= 0) {
-        shader->setUniform(pack.uBorderWidthLoc, thickness);
-    }
-    if (pack.uColorLoc >= 0) {
-        shader->setUniform(pack.uColorLoc, outlineColor);
+    // Focus flag: the pack mixes its active/inactive appearance params on this.
+    if (pack.uFocusedLoc >= 0) {
+        const float focused = (w == KWin::effects->activeWindow()) ? 1.0f : 0.0f;
+        shader->setUniform(pack.uFocusedLoc, focused);
     }
 
     // Pack-declared parameters (customParams / customColors). Values are resolved
@@ -566,7 +549,7 @@ void PlasmaZonesEffect::drawWindow(const KWin::RenderTarget& renderTarget, const
                     && !stateIt->second.bufferTex.empty();
 
                 KWin::ShaderBinder binder(pack->shader.get());
-                pushBorderUniforms(w, *pack, *bit, viewport.scale());
+                pushBorderUniforms(w, *pack, viewport.scale());
 
                 if (channelsReady) {
                     const SurfaceMultipassState& state = stateIt->second;

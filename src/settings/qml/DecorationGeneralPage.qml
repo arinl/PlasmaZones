@@ -3,7 +3,6 @@
 
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
@@ -14,10 +13,12 @@ import org.kde.kirigami as Kirigami
  * per-surface card (Windows / OSDs / Popups) inherits from here unless it
  * defines its own override. It edits the DecorationProfileTree baseline via
  * `settingsController.decorationPage` with the empty surface path "":
- *   - a default decoration-pack chain (ChainEditor), and
- *   - a border/titlebar card with width / radius spinboxes, active +
- *     inactive color pickers, useSystemColors / showBorder / hideTitlebar
- *     toggles.
+ *   - a decoration-pack chain (ChainEditor). Border width / corner radius /
+ *     colour are the "border" pack's OWN parameters, edited inline by
+ *     expanding the pack in the chain (same as any other pack's params).
+ *     There is no separate "border appearance" block: a surface shows a
+ *     border iff "border" is in its chain.
+ *   - a single "Hide title bar" toggle (the one non-shader decoration field).
  *
  * Reactive-latch pattern: imperative refresh from the controller on
  * `profilesChanged` / `shaderEffectsChanged`, NOT function bindings that
@@ -35,8 +36,8 @@ SettingsFlickable {
     property var _effects: []
     property var _chain: []
     property var _params: ({})
-    // The fully-resolved baseline (defaults filled in) drives the border
-    // controls so they always show a concrete value.
+    // The fully-resolved baseline (defaults filled in) drives the title-bar
+    // toggle so it always shows a concrete value.
     property var _resolved: ({})
 
     function refresh() {
@@ -85,7 +86,7 @@ SettingsFlickable {
 
                 Label {
                     Layout.fillWidth: true
-                    text: i18n("Ordered list of decoration shader packs applied to every surface. Each pack draws on top of the previous one.")
+                    text: i18n("Ordered list of decoration shader packs applied to every surface. Each pack draws on top of the previous one. Expand a pack to edit its settings — for example, the Border pack's width, corner radius and colours.")
                     wrapMode: Text.WordWrap
                     opacity: 0.8
                 }
@@ -115,112 +116,14 @@ SettingsFlickable {
             }
         }
 
-        // ── Border & titlebar ────────────────────────────────────────────
+        // ── Title bar ────────────────────────────────────────────────────
         SettingsCard {
             Layout.fillWidth: true
-            headerText: i18n("Border and titlebar")
-            showToggle: true
-            toggleChecked: page._resolved && page._resolved.showBorder === true
+            headerText: i18n("Title bar")
             collapsible: true
-            onToggleClicked: function (checked) {
-                if (page.bridge)
-                    page.bridge.setBorderField(page.surfacePath, "showBorder", checked);
-            }
 
             contentItem: ColumnLayout {
                 spacing: Kirigami.Units.smallSpacing
-
-                SettingsRow {
-                    title: i18n("Use system accent color")
-                    description: i18n("Derive border colors from your system color scheme")
-
-                    SettingsSwitch {
-                        id: useSystemColorsSwitch
-
-                        checked: page._resolved && page._resolved.useSystemColors === true
-                        accessibleName: i18n("Use system accent color")
-                        onToggled: function (newValue) {
-                            if (page.bridge)
-                                page.bridge.setBorderField(page.surfacePath, "useSystemColors", newValue);
-                        }
-                    }
-                }
-
-                SettingsSeparator {
-                    visible: !useSystemColorsSwitch.checked
-                }
-
-                SettingsRow {
-                    visible: !useSystemColorsSwitch.checked
-                    title: i18n("Active border color")
-                    description: i18n("Border color for the focused window")
-
-                    ColorSwatchRow {
-                        id: activeSwatch
-
-                        color: (page._resolved && page._resolved.activeColor) ? page._resolved.activeColor : "transparent"
-                        onClicked: {
-                            activeColorDialog.selectedColor = activeSwatch.color;
-                            activeColorDialog.open();
-                        }
-                    }
-                }
-
-                SettingsSeparator {
-                    visible: !useSystemColorsSwitch.checked
-                }
-
-                SettingsRow {
-                    visible: !useSystemColorsSwitch.checked
-                    title: i18n("Inactive border color")
-                    description: i18n("Border color for unfocused windows")
-
-                    ColorSwatchRow {
-                        id: inactiveSwatch
-
-                        color: (page._resolved && page._resolved.inactiveColor) ? page._resolved.inactiveColor : "transparent"
-                        onClicked: {
-                            inactiveColorDialog.selectedColor = inactiveSwatch.color;
-                            inactiveColorDialog.open();
-                        }
-                    }
-                }
-
-                SettingsSeparator {}
-
-                SettingsRow {
-                    title: i18n("Border width")
-                    description: i18n("Thickness of colored borders around decorated windows")
-
-                    SettingsSpinBox {
-                        from: 0
-                        to: 32
-                        value: (page._resolved && page._resolved.borderWidth !== undefined) ? page._resolved.borderWidth : 0
-                        onValueModified: value => {
-                            if (page.bridge)
-                                page.bridge.setBorderField(page.surfacePath, "borderWidth", value);
-                        }
-                    }
-                }
-
-                SettingsSeparator {}
-
-                SettingsRow {
-                    title: i18n("Corner radius")
-                    description: i18n("Roundness of border corners (0 for square)")
-
-                    SettingsSpinBox {
-                        from: 0
-                        to: 32
-                        value: (page._resolved && page._resolved.borderRadius !== undefined) ? page._resolved.borderRadius : 0
-                        onValueModified: value => {
-                            if (page.bridge)
-                                page.bridge.setBorderField(page.surfacePath, "borderRadius", value);
-                        }
-                    }
-                }
-
-                SettingsSeparator {}
 
                 SettingsRow {
                     title: i18n("Hide title bars")
@@ -231,34 +134,11 @@ SettingsFlickable {
                         accessibleName: i18n("Hide title bars on decorated windows")
                         onToggled: function (newValue) {
                             if (page.bridge)
-                                page.bridge.setBorderField(page.surfacePath, "hideTitlebar", newValue);
+                                page.bridge.setHideTitlebar(page.surfacePath, newValue);
                         }
                     }
                 }
             }
-        }
-    }
-
-    // ── Color dialogs ────────────────────────────────────────────────────
-    ColorDialog {
-        id: activeColorDialog
-
-        options: ColorDialog.ShowAlphaChannel
-        title: i18n("Choose Active Border Color")
-        onAccepted: {
-            if (page.bridge)
-                page.bridge.setBorderField(page.surfacePath, "activeColor", selectedColor);
-        }
-    }
-
-    ColorDialog {
-        id: inactiveColorDialog
-
-        options: ColorDialog.ShowAlphaChannel
-        title: i18n("Choose Inactive Border Color")
-        onAccepted: {
-            if (page.bridge)
-                page.bridge.setBorderField(page.surfacePath, "inactiveColor", selectedColor);
         }
     }
 }

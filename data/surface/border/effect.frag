@@ -2,24 +2,17 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 //
 // Border surface shader — rounded corners + window border, the first surface
-// pack. One analytic rounded-rect SDF over the content/frame rect drives BOTH
-// the corner rounding and the outline (the KDE-Rounded-Corners / shapecorners
-// model), identically for decorated and borderless surfaces:
+// pack. Width, corner radius and colours are this pack's own PARAMETERS (not a
+// separate host-defined "decoration appearance"): p_borderWidth / p_cornerRadius
+// (logical px, scaled to device px by uSurfaceScale) and p_activeColor /
+// p_inactiveColor, mixed on the contract's uSurfaceFocused so the focused vs
+// unfocused colour is the shader's job. (p_useSystemAccent is consumed host-side
+// — when set, the effect fills the active/inactive colour params from the system
+// scheme — so the shader just reads the colour params.)
 //
-//   * Corner clip: the surface content is clipped to the INNER rounded rect
-//     (inset by the border thickness), transparent outside. The redirected
-//     texture includes any server-side decoration, so a visible titlebar's
-//     corners round too.
-//
-//   * Outline: the border band [-thickness, 0] is laid OVER the background, not
-//     over the content, so the content sits INSIDE the border and nothing from
-//     the surface leaks through it — a TRANSLUCENT border blends with what is
-//     behind the surface, not with its content.
-//
-// All geometry + decoration state arrives through the surface contract uniforms
-// (host-resolved): uSurfaceSize / uSurfaceFrameTopLeft / uSurfaceFrameSize and
-// uSurfaceRadius / uSurfaceBorderWidth / uSurfaceColor. The pack declares no
-// parameters of its own.
+// One analytic rounded-rect SDF over the content/frame rect both clips the
+// content to the inner rounded rect and lays the border band over the
+// background, so a translucent border blends with what is behind the surface.
 
 #version 450
 #include <surface_uniforms.glsl>
@@ -30,35 +23,34 @@ layout(location = 0) out vec4 fragColor;
 void main() {
     vec4 tex = surfaceTexel(vTexCoord);
 
-    // Fragment's top-down device pixel within the surface texture; the content
-    // rect sits at uSurfaceFrameTopLeft..+uSurfaceFrameSize.
+    // Fragment's top-down device pixel; the content rect sits at
+    // uSurfaceFrameTopLeft..+uSurfaceFrameSize (device px).
     vec2 p = surfacePixel(vTexCoord);
+    const float aa = 0.7;
+
+    // Pack params are logical px — scale to the device-px geometry space.
+    float width = p_borderWidth * uSurfaceScale;
+    // OUTER radius = content radius + width, so the band sits inside it and the
+    // content corner ends one band-width in, at p_cornerRadius.
+    float radius = (p_cornerRadius + p_borderWidth) * uSurfaceScale;
+
     vec2 halfSz = 0.5 * uSurfaceFrameSize;
     vec2 cen = uSurfaceFrameTopLeft + halfSz;
-    float r = clamp(uSurfaceRadius, 0.0, min(halfSz.x, halfSz.y));
+    float r = clamp(radius, 0.0, min(halfSz.x, halfSz.y));
 
-    // Analytic rounded-rect SDF over the frame (Inigo-Quilez); < 0 inside.
     vec2 q = abs(p - cen) - halfSz + r;
     float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
 
-    // FIXED device-pixel AA half-width (all length uniforms are device px). NOT
-    // fwidth(d): an SDF's fwidth is ~1 on straight edges but ~1.4 at corners
-    // (diagonal gradient), which widens the AA at corners — softening the clip
-    // and thinning the outline band there. A constant keeps clip + band width
-    // uniform everywhere (KDE-Rounded-Corners does the same).
-    float aa = 0.7;
-
-    // 1 inside the rounded rect, 0 outside, AA across the boundary.
     float insideMask = 1.0 - smoothstep(-aa, aa, d);
+    float edge = smoothstep(-width - aa, -width + aa, d);
 
-    // Border edge factor: 0 deep inside the content, ramps to 1 from the
-    // border's INNER edge outward (d > -thickness).
-    float edge = smoothstep(-uSurfaceBorderWidth - aa, -uSurfaceBorderWidth + aa, d);
+    // Focus-mixed border colour (the shader picks active vs inactive).
+    vec4 outlineColor = mix(p_inactiveColor, p_activeColor, clamp(uSurfaceFocused, 0.0, 1.0));
 
-    // Clip content to the INNER rounded rect and lay the border band over
-    // transparency, premultiplied throughout. (1 - edge) is the inner content
-    // mask; edge * insideMask is the band clipped to the outer rounded rect.
-    float ba = edge * insideMask * uSurfaceColor.a;  // border coverage * its alpha
-    vec4 contentPx = tex * (1.0 - edge);             // content, clipped to the inner rect
-    fragColor = vec4(uSurfaceColor.rgb * ba, ba) + contentPx * (1.0 - ba);
+    // Clip content to the inner rounded rect; lay the band over transparency,
+    // premultiplied. width <= 0 (no border in the chain's params) leaves the
+    // content rounded with no band.
+    float ba = edge * insideMask * outlineColor.a;
+    vec4 contentPx = tex * (1.0 - edge);
+    fragColor = vec4(outlineColor.rgb * ba, ba) + contentPx * (1.0 - ba);
 }

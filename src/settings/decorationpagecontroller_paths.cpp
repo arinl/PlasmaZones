@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // DecorationPageController surface-taxonomy helpers — the small
-// Q_INVOKABLE readers (surfaceLeafPaths / surfaceLabel / parentChain)
-// that translate decoration surface paths into UI taxonomy. Split out so
-// decorationpagecontroller.cpp stays under the project's 800-line cap.
-// Same class, separate TU, no API change.
+// Q_INVOKABLE readers (surfaceLabel / parentChain) that translate decoration
+// surface paths into UI taxonomy. Split out so decorationpagecontroller.cpp
+// stays under the project's 800-line cap. Same class, separate TU, no API
+// change. (The per-page surface lists live in the QML page models, mirroring
+// the animation sub-pages — there is no C++ leaf-path accessor.)
 
 #include "decoration_controller_detail.h"
 #include "decorationpagecontroller.h"
@@ -15,11 +16,6 @@
 #include <QLatin1Char>
 
 namespace PlasmaZones {
-
-QStringList DecorationPageController::surfaceLeafPaths() const
-{
-    return PhosphorSurfaceShaders::decorationLeafSurfacePaths();
-}
 
 QString DecorationPageController::surfaceLabel(const QString& path) const
 {

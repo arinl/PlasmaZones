@@ -19,7 +19,9 @@ import org.kde.kirigami as Kirigami
  * (category). When on, it edits the DIRECT override at this path — a
  * ChainEditor (where border width / radius / colour are the "border" pack's
  * own inline parameters, NOT a separate appearance block) plus a single
- * "Hide title bar" toggle — and offers "Reset to inherited" (clearOverride).
+ * "Hide title bar" toggle. Toggling the override OFF clears it (reset to
+ * inherited) — exactly like AnimationEventCard; there is no separate reset
+ * button.
  *
  * Reactive-latch pattern: imperative refresh from the controller on
  * `profilesChanged` / `shaderEffectsChanged`, NOT function bindings that
@@ -238,25 +240,6 @@ Item {
                         onToggled: function (newValue) {
                             if (root.bridge)
                                 root.bridge.setHideTitlebar(root.surfacePath, newValue);
-                        }
-                    }
-                }
-
-                SettingsSeparator {}
-
-                RowLayout {
-                    Layout.fillWidth: true
-
-                    Item {
-                        Layout.fillWidth: true
-                    }
-
-                    Button {
-                        text: i18n("Reset to inherited")
-                        icon.name: "edit-reset"
-                        onClicked: {
-                            if (root.bridge)
-                                root.bridge.clearOverride(root.surfacePath);
                         }
                     }
                 }

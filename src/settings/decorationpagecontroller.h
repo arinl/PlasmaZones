@@ -98,12 +98,6 @@ public:
 
     // ── Surface taxonomy ──────────────────────────────────────────────────
 
-    /// Concrete leaf surface paths that can carry a decoration override
-    /// (window.tiled / window.snapped / window.floating / osd /
-    /// popup.snapAssist / popup.zoneSelector / popup.layoutPicker /
-    /// overlay). Mirrors `decorationLeafSurfacePaths()`.
-    Q_INVOKABLE QStringList surfaceLeafPaths() const;
-
     /// Title-cased human label for @p path's last segment (e.g.
     /// `"popup.snapAssist"` → `"Snap Assist"`). Empty path → "Global".
     Q_INVOKABLE QString surfaceLabel(const QString& path) const;
@@ -157,11 +151,6 @@ public:
     /// by the editor's Randomize action so a single roll persists as one
     /// tree write instead of one per parameter. For "" edits the baseline.
     Q_INVOKABLE void setChainParams(const QString& path, const QString& packId, const QVariantMap& params);
-
-    /// Clear every per-pack parameter override at @p path (engages an
-    /// empty parameters map — "use all pack defaults"). For "" edits the
-    /// baseline.
-    Q_INVOKABLE void clearChainParams(const QString& path);
 
     // ── Titlebar field mutator ─────────────────────────────────────────────
 

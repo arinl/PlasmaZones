@@ -1,59 +1,41 @@
 // SPDX-FileCopyrightText: 2026 fuddlesworth
 // SPDX-License-Identifier: GPL-3.0-or-later
-
 import QtQuick
-import QtQuick.Layouts
-import org.kde.kirigami as Kirigami
 
-/**
- * @brief Decoration → Surfaces → Windows.
- *
- * An "All windows" category card (path "window") sits above the three
- * window placement-state cards (window.tiled / window.snapped /
- * window.floating). Setting an override on "All windows" cascades to every
- * placement state via the DecorationProfileTree walk-up; each placement
- * state inherits global → "All windows" unless it defines its own override.
- * Mirrors AnimationsWindowsPage's parent-node + per-leaf layout.
- */
-SettingsFlickable {
-    id: page
-
-    contentHeight: content.implicitHeight
-    clip: true
-
-    ColumnLayout {
-        id: content
-
-        width: parent.width
-        spacing: Kirigami.Units.largeSpacing
-
-        Kirigami.InlineMessage {
-            Layout.fillWidth: true
-            type: Kirigami.MessageType.Information
-            text: i18n("Decoration overrides for windows. \"All windows\" applies to every placement state; each state can override it. Without an override, a state inherits its parents up to the global defaults.")
+// Decoration → Surfaces → Windows. The card list is viewport-virtualized by
+// DecorationSurfaceCardList (only visible DecorationSurfaceCards build) — see
+// that component for the rationale. Mirrors AnimationsWindowsPage's thin
+// model-declaration shape.
+//
+// An "All windows" parent-node card (path "window") sits above the three
+// placement-state cards (window.tiled / window.snapped / window.floating);
+// an override on it cascades to every state via the DecorationProfileTree
+// walk-up, and each state inherits global → "All windows" unless it defines
+// its own override. Title bars are a window concept, so every window card
+// exposes the hide-title-bar toggle.
+DecorationSurfaceCardList {
+    Accessible.name: i18n("Window decoration surfaces")
+    headerText: i18n("Decoration overrides for windows. \"All windows\" applies to every placement state; each state can override it. Without an override, a state inherits its parents up to the global defaults.")
+    surfaceModel: [
+        {
+            "surfacePath": "window",
+            "isParentNode": true,
+            "showTitlebarToggle": true
+        },
+        {
+            "surfacePath": "window.tiled",
+            "isParentNode": false,
+            "showTitlebarToggle": true
+        },
+        {
+            "surfacePath": "window.snapped",
+            "isParentNode": false,
+            "showTitlebarToggle": true
+        },
+        {
+            "surfacePath": "window.floating",
+            "isParentNode": false,
+            "showTitlebarToggle": true
         }
-
-        // ── "All windows" parent-node card (path "window") ───────────────
-        DecorationSurfaceCard {
-            Layout.fillWidth: true
-            surfacePath: "window"
-            isParentNode: true
-            collapsible: true
-            // Title bars are a window concept — exposed only on window cards.
-            showTitlebarToggle: true
-        }
-
-        Repeater {
-            model: ["window.tiled", "window.snapped", "window.floating"]
-
-            delegate: DecorationSurfaceCard {
-                required property string modelData
-
-                Layout.fillWidth: true
-                surfacePath: modelData
-                collapsible: true
-                showTitlebarToggle: true
-            }
-        }
-    }
+    ]
 }

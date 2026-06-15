@@ -207,20 +207,6 @@ void DecorationPageController::setChainParams(const QString& path, const QString
     writeDirectProfile(m_settings, tree, path, profile);
 }
 
-void DecorationPageController::clearChainParams(const QString& path)
-{
-    if (!m_settings)
-        return;
-    if (!path.isEmpty() && !PhosphorSurfaceShaders::decorationSurfaceSupported(path))
-        return;
-    DecorationProfileTree tree = readTree(m_settings);
-    DecorationProfile profile = directProfileAt(tree, path);
-    // Engaged-but-empty map = explicitly "use all pack defaults" (distinct
-    // from nullopt = inherit the parent's parameter overrides).
-    profile.parameters = QVariantMap();
-    writeDirectProfile(m_settings, tree, path, profile);
-}
-
 // ── Titlebar field mutator ────────────────────────────────────────────────────
 
 void DecorationPageController::setHideTitlebar(const QString& path, bool hide)

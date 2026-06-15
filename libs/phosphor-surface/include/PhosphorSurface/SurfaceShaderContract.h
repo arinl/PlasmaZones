@@ -25,7 +25,7 @@ namespace PhosphorSurfaceShaders {
 ///      no compositor-side equivalent).
 ///
 ///   3. **Surface shaders** — `SurfaceShaderRegistry` (this contract),
-///      sourced from `data/surfaces/*/`. Persistent per-window surface
+///      sourced from `data/surface/*/`. Persistent per-window surface
 ///      layers composited OVER (or as part of) the live window content:
 ///      the decoration band / border, rounded corners, focus tint, and
 ///      similar window-chrome effects. Unlike an animation shader these

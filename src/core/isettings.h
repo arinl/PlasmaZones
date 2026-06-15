@@ -211,9 +211,11 @@ public:
     // Global surface-shader selection — ONE pack for all decorated windows
     // (simpler than the per-event animation-shader model). The selected
     // pack id plus a per-pack parameter override map (paramId -> value).
-    // Lives on the interface so SurfaceShaderPageController can depend on
-    // ISettings (not the concrete Settings) per CLAUDE.md, letting unit
-    // tests stub it. Mirrors autotilePerAlgorithmSettings above.
+    // Superseded by the per-surface decorationProfileTree below for window
+    // decoration, but retained on the interface (consumed by the D-Bus
+    // settings adaptor) so consumers depend on ISettings, not the concrete
+    // Settings, letting unit tests stub it. Mirrors autotilePerAlgorithmSettings
+    // above.
     virtual QString surfaceShaderEffectId() const = 0;
     virtual void setSurfaceShaderEffectId(const QString& effectId) = 0;
     virtual QVariantMap surfaceShaderParameters() const = 0;

@@ -552,6 +552,16 @@ int validateSurfacePack(const QString& packDir, QTextStream& out)
         if (v.toObject().value(QLatin1String("path")).toString().isEmpty()) {
             lints << QStringLiteral("texture entry with empty `path` (dropped at load)");
         }
+        // Wrap vocabulary lint — read RAW metadata: SurfaceShaderEffect::fromJson
+        // silently clears an invalid wrap to clamp, so a lint over the parsed
+        // eff.textures could never surface an author's typo. Mirror fromJson's
+        // {clamp,repeat,mirror} guard so a bad wrap fails the validator instead.
+        const QString wrap = v.toObject().value(QLatin1String("wrap")).toString();
+        if (!wrap.isEmpty() && wrap != QLatin1String("clamp") && wrap != QLatin1String("repeat")
+            && wrap != QLatin1String("mirror")) {
+            lints
+                << QStringLiteral("texture wrap not in {clamp,repeat,mirror}: %1 (cleared to clamp at load)").arg(wrap);
+        }
     }
     // Multipass buffer lints — read RAW metadata, not the parsed struct: fromJson
     // clamps bufferScale into [0.125, 1.0] and drops missing buffers, so a lint
@@ -635,6 +645,54 @@ int validateSurfacePack(const QString& packDir, QTextStream& out)
                 const ShaderCompiler::Result result =
                     ShaderCompiler::compile(expanded.toUtf8(), QShader::FragmentStage);
                 errors += reportCompile(out, label, result, declaredParamNames(eff.parameters));
+            }
+        }
+    }
+
+    // ── vertex stage ──
+    // Mirror the daemon runtime (SurfaceShaderItem::updatePaintNode): an explicit
+    // per-pack `vertexShader` wins, else a per-pack `surface.vert` beside the
+    // fragment, else a shared `surface.vert` from the include paths. No scaffold,
+    // no param preamble (surface packs ship their own main()). Without this a
+    // malformed vertex stage passes the validator and only fails at the live
+    // daemon — the sibling zone path (validatePack) already bakes the vertex
+    // stage, so surface validation must too.
+    {
+        const QStringList includePaths = {QFileInfo(packDir).absolutePath() + QStringLiteral("/shared")};
+        QString vertPath = eff.vertexShaderPath;
+        if (vertPath.isEmpty()) {
+            const QString vertLocal = QDir(packDir).filePath(QStringLiteral("surface.vert"));
+            if (QFile::exists(vertLocal)) {
+                vertPath = vertLocal;
+            } else {
+                for (const QString& incDir : includePaths) {
+                    const QString candidate = incDir + QStringLiteral("/surface.vert");
+                    if (QFile::exists(candidate)) {
+                        vertPath = candidate;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!vertPath.isEmpty() && QFile::exists(vertPath)) {
+            const QString label = QFileInfo(vertPath).fileName();
+            QFile vertFile(vertPath);
+            if (!vertFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                out << "  " << label.leftJustified(14) << "ERROR\n    cannot read " << vertPath << "\n";
+                ++errors;
+            } else {
+                const QString rawVert = QString::fromUtf8(vertFile.readAll());
+                QString err;
+                const QString expanded =
+                    ShaderCompiler::expandSource(rawVert, QFileInfo(vertPath).absolutePath(), includePaths, &err);
+                if (expanded.isEmpty()) {
+                    out << "  " << label.leftJustified(14) << "ERROR\n    include expansion failed: " << err << "\n";
+                    ++errors;
+                } else {
+                    const ShaderCompiler::Result result =
+                        ShaderCompiler::compile(expanded.toUtf8(), QShader::VertexStage);
+                    errors += reportCompile(out, label, result, declaredParamNames(eff.parameters));
+                }
             }
         }
     }

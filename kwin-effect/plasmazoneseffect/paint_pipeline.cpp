@@ -21,6 +21,7 @@
 #include <QDate>
 #include <QDateTime>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QTime>
 #include <QVector2D>
 #include <QVector4D>
@@ -1179,6 +1180,12 @@ void PlasmaZonesEffect::captureOldWindowSnapshot(ShaderTransition& transition, K
     setShader(window, nullptr);
 
     m_capturingSnapshot = true;
+    // Guard the re-entrancy flag against a throw from the draw chain — a leaked
+    // m_capturingSnapshot would corrupt every subsequent paint. Same pattern as
+    // the surface-layer capture sites in surfacelayers.cpp.
+    auto resetCapture = qScopeGuard([this] {
+        m_capturingSnapshot = false;
+    });
     {
         KWin::RenderTarget renderTarget(&fbo);
         KWin::RenderViewport viewport(logicalGeometry, scale, renderTarget, QPoint());
@@ -1197,6 +1204,7 @@ void PlasmaZonesEffect::captureOldWindowSnapshot(ShaderTransition& transition, K
         KWin::effects->drawWindow(renderTarget, viewport, window, captureMask, KWin::Region::infinite(), captureData);
         KWin::GLFramebuffer::popFramebuffer();
     }
+    resetCapture.dismiss();
     m_capturingSnapshot = false;
 
     setShader(window, morphShader);

@@ -242,8 +242,14 @@ void PlasmaZonesEffect::continueDaemonReadySetup()
         connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher* w) {
             w->deleteLater();
             QDBusPendingReply<QStringList> reply = *w;
+            // Clear the stale local float set unconditionally. This reply lands
+            // during daemon bringup, so the freshly-registered daemon's float
+            // state is authoritative (and empty on a fresh start). An invalid
+            // reply still means the previous session's entries must be dropped —
+            // retaining them would leave isWindowFloating() returning true for
+            // windows that are no longer floating.
+            m_navigationHandler->clearAllFloatingState();
             if (reply.isValid()) {
-                m_navigationHandler->clearAllFloatingState();
                 QStringList floatingIds = reply.value();
                 for (const QString& id : floatingIds) {
                     m_navigationHandler->setWindowFloating(id, true);

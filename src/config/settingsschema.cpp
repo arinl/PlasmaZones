@@ -896,8 +896,9 @@ void appendSurfaceSchema(PhosphorConfig::Schema& schema)
         {CD::surfaceShaderParametersKey(), CD::surfaceShaderParameters(), QMetaType::QVariantMap},
         // Per-surface decoration tree — persists as a nested JSON object (same
         // QVariantMap storage shape as ShaderParameters above and the animation
-        // ShaderProfileTree blob). The v4→v5 migration seeds it; the default is
-        // the ConfigDefaults baseline serialized to a map.
+        // ShaderProfileTree blob). The v3→v4 migration seeds it (via
+        // seedDecorationProfileTree); the default is the ConfigDefaults baseline
+        // serialized to a map.
         {CD::surfaceDecorationTreeKey(), CD::decorationProfileTree().toJson().toVariantMap(), QMetaType::QVariantMap},
     };
 }

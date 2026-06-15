@@ -909,10 +909,11 @@ public:
     }
     int snappingBorderRadius() const override
     {
-        return 0;
+        return m_snappingBorderRadius;
     }
-    void setSnappingBorderRadius(int) override
+    void setSnappingBorderRadius(int value) override
     {
+        m_snappingBorderRadius = value;
     }
     QColor snappingBorderColor() const override
     {
@@ -1223,6 +1224,7 @@ private:
     bool m_snappingShowBorder = false;
     bool m_snappingHideTitleBars = true;
     int m_snappingBorderWidth = 2;
+    int m_snappingBorderRadius = 0;
     QStringList m_snappingLayoutOrder;
     QStringList m_tilingAlgorithmOrder;
     QVariantList m_dragActivationTriggers;

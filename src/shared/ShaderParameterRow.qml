@@ -135,8 +135,10 @@ Item {
 
                     var fallback = paramDelegate.paramData.default !== undefined ? paramDelegate.paramData.default : 0.5;
                     var v = paramDelegate._value(fallback);
-                    var num = Number(v);
-                    return isNaN(num) ? Number(fallback) || 0.5 : num;
+                    // _numberOr rejects NaN/Infinity/non-numeric so a legitimate
+                    // stored 0 survives (a `Number(x) || 0.5` coercion would
+                    // wrongly turn 0 into 0.5).
+                    return paramDelegate._numberOr(v, paramDelegate._numberOr(fallback, 0.5));
                 }
                 // Defer host-driven updates while the user is interacting,
                 // INCLUDING keyboard arrow adjustments — `pressed` is only
@@ -381,7 +383,9 @@ Item {
                         return 1024;
 
                     var v = paramDelegate.currentValues[paramDelegate.paramData.id + "_svgSize"];
-                    return Number(v) || 1024;
+                    // _numberOr preserves a legitimate stored 0 (a `Number(v) ||
+                    // 1024` coercion would wrongly turn 0 into 1024).
+                    return paramDelegate._numberOr(v, 1024);
                 }
                 when: !svgSizeSpinBox.activeFocus
                 restoreMode: Binding.RestoreNone

@@ -862,9 +862,9 @@ public:
 
     // Surface Settings — global (one surface-shader pack for all decorated
     // windows). PhosphorConfig::Store-backed (see settingsschema.cpp). Also on
-    // the ISettings interface so SurfaceShaderPageController can depend on
-    // ISettings; the kwin-effect reads them by Q_PROPERTY name over D-Bus and
-    // the settings UI binds the same names.
+    // the ISettings interface so the D-Bus settings adaptor depends on ISettings
+    // (not the concrete Settings); the kwin-effect reads them by Q_PROPERTY name
+    // over D-Bus and the settings UI binds the same names.
     QString surfaceShaderEffectId() const override;
     void setSurfaceShaderEffectId(const QString& effectId) override;
     QVariantMap surfaceShaderParameters() const override;
@@ -1181,9 +1181,9 @@ Q_SIGNALS:
     void animationProfileChanged();
 
     // Surface-shader selection NOTIFY signals (surfaceShaderEffectIdChanged /
-    // surfaceShaderParametersChanged) now live on ISettings so
-    // SurfaceShaderPageController can depend on the interface; they are
-    // inherited here and emitted unqualified from the setters in settings.cpp.
+    // surfaceShaderParametersChanged) live on ISettings so consumers (the D-Bus
+    // settings adaptor) depend on the interface; they are inherited here and
+    // emitted unqualified from the setters in settings.cpp.
 
     // NOTE: do not redeclare signals already on ISettings here.
     // Re-declaring a base-class Q_SIGNAL produces a second moc index

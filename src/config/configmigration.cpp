@@ -54,7 +54,6 @@ PhosphorConfig::Schema makeMigrationSchema()
         {1, &ConfigMigration::migrateV1ToV2},
         {2, &ConfigMigration::migrateV2ToV3},
         {3, &ConfigMigration::migrateV3ToV4},
-        {4, &ConfigMigration::migrateV4ToV5},
     };
     return s;
 }
@@ -1699,50 +1698,44 @@ void ConfigMigration::migrateV3ToV4(QJsonObject& root)
     moveGroupAtPath(root, ConfigKeys::Legacy::v3SnappingAppearanceLabelsGroup(),
                     ConfigKeys::Legacy::v4SnappingZonesLabelsGroup());
 
+    // Seed the per-surface decoration tree from the (still-present) border/shader
+    // settings. Folded into the v3→v4 step rather than a separate version bump:
+    // v4 is unreleased, so no shipped config sits at v4-without-the-tree that a
+    // dedicated v4→v5 step would need to migrate incrementally.
+    seedDecorationProfileTree(root);
+
     // Stamp literal 4 — see migrateV1ToV2 for why this isn't ConfigSchemaVersion.
     root[ConfigKeys::versionKey()] = 4;
 }
 
-// ── Schema migration: v4 → v5 ───────────────────────────────────────────────
-// Per-surface decoration tree — seeds the new Surface.DecorationProfileTree
-// JSON blob from the user's existing border/shader settings so customisations
-// carry across the bump. COPIES into the new tree; leaves the source keys in
-// place (the kwin-effect still reads them until a later stage).
+namespace {
+// Forward declaration — defined in the anonymous namespace further below.
+// seedDecorationProfileTree sits above that definition but needs the dot-path
+// group walker so it can read nested groups via their ConfigDefaults accessors
+// instead of inline group-name literals.
+QJsonObject groupObjectAtPath(const QJsonObject& root, const QString& dotPath);
+} // anonymous namespace
 
-void ConfigMigration::migrateV4ToV5(QJsonObject& root)
+// ── Decoration-tree seed (part of the v3 → v4 migration) ────────────────────
+// Seeds Surface.DecorationProfileTree from the user's existing border/shader
+// settings so current customisations carry across. COPIES into the new tree;
+// leaves the source keys in place (the kwin-effect still reads them until a
+// later stage). Invoked from migrateV3ToV4 (not a separate version bump): v4 is
+// unreleased, so there is no shipped intermediate schema to migrate from, and
+// migrateV3ToV4's own idempotency gate prevents a re-seed on an already-v4 doc.
+
+void ConfigMigration::seedDecorationProfileTree(QJsonObject& root)
 {
-    // Defense-in-depth idempotency guard, mirroring the earlier steps: a direct
-    // caller that hands us an already-v5 doc must not re-seed (and clobber) a
-    // tree the user has since edited.
-    if (root.value(ConfigKeys::versionKey()).toInt(0) >= 5) {
-        return;
-    }
-
-    // Read the existing border/shader settings from their live v4 paths. No
-    // rename accompanies this bump — Tiling.Appearance.* and Surface.* keep the
-    // exact paths a v4 config wrote — so the live ConfigDefaults accessors ARE
-    // the frozen v4 paths here; no Legacy::v4* freeze accessors are introduced.
-    // (A future rename of these accessors must add frozen v4* copies and point
-    // this step at them, per the freeze policy documented on migrateV2ToV3.)
+    // Read the existing border/shader settings from their live paths. No rename
+    // accompanies the decoration-tree addition — Tiling.Appearance.* and
+    // Surface.* keep the exact paths they already use — so the live
+    // ConfigDefaults accessors ARE the right paths here. (A future rename of
+    // these accessors must add frozen copies and point this seed at them, per
+    // the freeze policy documented on migrateV2ToV3.)
     const QJsonObject surface = root.value(ConfigDefaults::surfaceGroup()).toObject();
-    const QJsonObject borders = root.value(ConfigDefaults::tilingGroup())
-                                    .toObject()
-                                    .value(QLatin1String("Appearance"))
-                                    .toObject()
-                                    .value(QLatin1String("Borders"))
-                                    .toObject();
-    const QJsonObject colors = root.value(ConfigDefaults::tilingGroup())
-                                   .toObject()
-                                   .value(QLatin1String("Appearance"))
-                                   .toObject()
-                                   .value(QLatin1String("Colors"))
-                                   .toObject();
-    const QJsonObject decorations = root.value(ConfigDefaults::tilingGroup())
-                                        .toObject()
-                                        .value(QLatin1String("Appearance"))
-                                        .toObject()
-                                        .value(QLatin1String("Decorations"))
-                                        .toObject();
+    const QJsonObject borders = groupObjectAtPath(root, ConfigDefaults::tilingAppearanceBordersGroup());
+    const QJsonObject colors = groupObjectAtPath(root, ConfigDefaults::tilingAppearanceColorsGroup());
+    const QJsonObject decorations = groupObjectAtPath(root, ConfigDefaults::tilingAppearanceDecorationsGroup());
 
     // Only seed when the user actually customised at least one of the source
     // keys. A clean config that never touched them is left untouched so it
@@ -1761,7 +1754,6 @@ void ConfigMigration::migrateV4ToV5(QJsonObject& root)
     const bool anyCustom = haveShaderId || haveWidth || haveRadius || haveShowBorder || haveActive || haveInactive
         || haveUseSystem || haveHideTitle;
     if (!anyCustom) {
-        root[ConfigKeys::versionKey()] = 5;
         return;
     }
 
@@ -1786,16 +1778,32 @@ void ConfigMigration::migrateV4ToV5(QJsonObject& root)
     window.hideTitlebar = haveHideTitle ? decorations.value(ConfigDefaults::hideTitleBarsKey()).toBool()
                                         : ConfigDefaults::autotileHideTitleBars();
 
+    // Clamp width/radius to the same bounds the live read path enforces
+    // (settingsschema clampInt) so a hand-edited out-of-range v4 value can't seed
+    // a value the running border path would have rejected.
     const int borderWidth =
-        haveWidth ? borders.value(ConfigDefaults::widthKey()).toInt() : ConfigDefaults::autotileBorderWidth();
+        qBound(ConfigDefaults::autotileBorderWidthMin(),
+               haveWidth ? borders.value(ConfigDefaults::widthKey()).toInt() : ConfigDefaults::autotileBorderWidth(),
+               ConfigDefaults::autotileBorderWidthMax());
     const int cornerRadius =
-        haveRadius ? borders.value(ConfigDefaults::radiusKey()).toInt() : ConfigDefaults::autotileBorderRadius();
+        qBound(ConfigDefaults::autotileBorderRadiusMin(),
+               haveRadius ? borders.value(ConfigDefaults::radiusKey()).toInt() : ConfigDefaults::autotileBorderRadius(),
+               ConfigDefaults::autotileBorderRadiusMax());
     const bool useSystemAccent = haveUseSystem ? colors.value(ConfigDefaults::useSystemKey()).toBool()
                                                : ConfigDefaults::autotileUseSystemBorderColors();
-    const QColor activeColor = haveActive ? QColor(colors.value(ConfigDefaults::activeKey()).toString())
-                                          : ConfigDefaults::autotileBorderColor();
-    const QColor inactiveColor = haveInactive ? QColor(colors.value(ConfigDefaults::inactiveKey()).toString())
-                                              : ConfigDefaults::autotileInactiveBorderColor();
+    // Guard the stored colour strings: a corrupt/hand-edited value yields an
+    // invalid QColor whose .name() would silently seed transparent-black, so fall
+    // back to the default colour instead (mirrors the live validColorOr path).
+    const auto colorOr = [](const QString& stored, const QColor& fallback) {
+        const QColor c(stored);
+        return c.isValid() ? c : fallback;
+    };
+    const QColor activeColor = haveActive
+        ? colorOr(colors.value(ConfigDefaults::activeKey()).toString(), ConfigDefaults::autotileBorderColor())
+        : ConfigDefaults::autotileBorderColor();
+    const QColor inactiveColor = haveInactive
+        ? colorOr(colors.value(ConfigDefaults::inactiveKey()).toString(), ConfigDefaults::autotileInactiveBorderColor())
+        : ConfigDefaults::autotileInactiveBorderColor();
 
     QVariantMap borderParams;
     borderParams.insert(QStringLiteral("borderWidth"), borderWidth);
@@ -1805,11 +1813,20 @@ void ConfigMigration::migrateV4ToV5(QJsonObject& root)
     borderParams.insert(QStringLiteral("inactiveColor"), inactiveColor.name(QColor::HexArgb));
 
     QVariantMap params;
-    params.insert(ConfigDefaults::surfaceShaderEffectId(), borderParams);
+    // The border params are the BORDER pack's parameters; file them under the
+    // chain's pack id only when that pack IS the border pack. A v4 config that
+    // selected a different surface pack (none shipped before this category
+    // existed, but guard defensively) would otherwise carry a stray param block
+    // keyed to a pack absent from the chain.
+    if (window.chain && window.chain->value(0) == ConfigDefaults::surfaceShaderEffectId()) {
+        params.insert(ConfigDefaults::surfaceShaderEffectId(), borderParams);
+    }
     window.parameters = params;
 
-    // Empty baseline + the migrated profile under the `window` path.
+    // Explicit empty baseline (matching ConfigDefaults::decorationProfileTree())
+    // + the migrated profile under the `window` path.
     PhosphorSurfaceShaders::DecorationProfileTree tree;
+    tree.setBaseline({});
     tree.setOverride(QStringLiteral("window"), window);
 
     // Write the tree into Surface.DecorationProfileTree, preserving any sibling
@@ -1824,9 +1841,6 @@ void ConfigMigration::migrateV4ToV5(QJsonObject& root)
     surfaceOut[ConfigDefaults::surfaceDecorationTreeKey()] =
         QString::fromUtf8(QJsonDocument(tree.toJson()).toJson(QJsonDocument::Compact));
     root[ConfigDefaults::surfaceGroup()] = surfaceOut;
-
-    // Stamp literal 5 — see migrateV1ToV2 for why this isn't ConfigSchemaVersion.
-    root[ConfigKeys::versionKey()] = 5;
 }
 
 // ── v4 finalizer: the multi-step cross-file conversion ─────────────────────

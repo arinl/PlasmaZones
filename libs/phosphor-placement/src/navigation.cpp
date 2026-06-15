@@ -25,11 +25,14 @@
 
 namespace PhosphorPlacement {
 
-// Snapped-window frames are inset by the snap border width via the shared
-// PhosphorGeometry::insetRect helper (also used by the autotile path), so the
-// snap border the KWin effect draws on the window's own edge sits INSIDE the
-// zone, leaving a border-width gap between adjacent tiles. @p inset is already 0
-// when the snap border is off (gating lives in IGeometryResolver::snapBorderInset).
+// Snapped-window frames are passed through the shared
+// PhosphorGeometry::insetRect helper (also used by the autotile path) with the
+// inset from IGeometryResolver::snapBorderInset, which returns 0 in all
+// configurations today: the KWin effect's border shader recolours the window's
+// own outermost band INSIDE the frame, so frames are not inset and a snapped
+// window fills its zone exactly (no border-width gap between tiles). insetRect
+// is retained as the seam for a future per-window-border design that would draw
+// outside the frame; with inset 0 it is a no-op.
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Navigation Helpers

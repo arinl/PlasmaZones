@@ -50,6 +50,10 @@ public:
     // ─────── Lookup ───────
 
     DecorationProfile resolve(const QString& surfacePath) const;
+    /// Returns the override stored directly at @p surfacePath, or a
+    /// default-constructed (all-unset) profile when none exists — which is
+    /// indistinguishable from a real all-unset override. Pair with hasOverride()
+    /// before trusting a non-empty-looking result.
     DecorationProfile directOverride(const QString& surfacePath) const;
     bool hasOverride(const QString& surfacePath) const;
     QStringList overriddenPaths() const;

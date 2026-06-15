@@ -23,18 +23,17 @@ public:
     virtual int defaultBorderWidth() const = 0;
     virtual int defaultBorderRadius() const = 0;
 
-    /// Per-side inset (in logical px) to shrink a snapped window's frame by so
-    /// the snap border the KWin effect draws on the window's own edge sits
-    /// INSIDE the zone, leaving a border-width gap between adjacent tiles.
-    /// Returns 0 when the snapping show-border setting is off (no border → no
-    /// inset, current behavior). The width mirrors exactly what the effect
-    /// borders snapped windows with: the global snapping border width
-    /// (snappingBorderWidth), NOT a zone's custom width — the effect's snap
-    /// BorderState carries a single per-mode width for every snapped window.
-    /// Per-window SetBorderVisible rules on an otherwise-borderless window are
-    /// out of scope: they're resolved compositor-side per window and aren't
-    /// reachable from this daemon-side geometry layer, so such windows are not
-    /// inset.
+    /// Per-side inset (in logical px) applied to a snapped window's frame.
+    /// Returns 0 in all configurations today: the KWin effect's border shader
+    /// recolours the window's OWN outermost band (inside the frame) for
+    /// decorated and borderless windows alike, so the border never extends past
+    /// the frame edge into the neighbour and a snapped window fills its zone
+    /// exactly. Any visible separation between tiles comes from the zone
+    /// gap/padding settings, not from a border-width inset. This is a reserved
+    /// seam — implementations return 0 and the inset is pinned to 0 by
+    /// test_daemongeometryresolver_inset — kept so a future per-window-border
+    /// design that draws OUTSIDE the frame can reintroduce a non-zero inset
+    /// here without re-threading the call sites.
     virtual int snapBorderInset() const = 0;
 };
 

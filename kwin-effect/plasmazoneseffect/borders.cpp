@@ -502,7 +502,7 @@ void PlasmaZonesEffect::pushBorderUniforms(KWin::EffectWindow* w, const Compiled
     }
     // Focus flag: the pack mixes its active/inactive appearance params on this.
     if (pack.uFocusedLoc >= 0) {
-        const float focused = (w == KWin::effects->activeWindow()) ? 1.0f : 0.0f;
+        const float focused = (KWin::effects && w == KWin::effects->activeWindow()) ? 1.0f : 0.0f;
         shader->setUniform(pack.uFocusedLoc, focused);
     }
     // Continuous time for an animated pack. -1 (static pack, e.g. the border)

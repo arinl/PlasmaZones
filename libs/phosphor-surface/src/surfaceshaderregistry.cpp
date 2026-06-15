@@ -597,6 +597,14 @@ QVariantMap SurfaceShaderRegistry::translateSurfaceParams(const SurfaceShaderEff
                         << "— passed through caller-resolved (no sourceDir to anchor against)";
                     path = candidate;
                 } else {
+                    // Absolute path in the in-memory branch — no sourceDir to
+                    // bound against, so accepted verbatim per the caller-trusted
+                    // policy. Log it (symmetric with the relative branch above)
+                    // so a settings-UI tester can see absolute overrides flowing
+                    // through unchecked.
+                    qCDebug(lcRegistry).noquote()
+                        << "Surface effect" << effect.id << "in-memory override texture path is absolute:" << candidate
+                        << "— passed through caller-trusted (no sourceDir to bound against)";
                     path = candidate;
                 }
             } else {
@@ -615,7 +623,20 @@ QVariantMap SurfaceShaderRegistry::translateSurfaceParams(const SurfaceShaderEff
         }
         const auto wrapOverride = friendlyParams.constFind(wrapKey);
         if (wrapOverride != friendlyParams.constEnd()) {
-            wrap = wrapOverride->toString();
+            const QString candidateWrap = wrapOverride->toString();
+            // Mirror fromJson's wrap-vocabulary guard so a runtime override
+            // can't smuggle an unvalidated wrap past the metadata-path check.
+            // An empty value clears to clamp; any non-{clamp,repeat,mirror}
+            // token is rejected and the wrap clears (clamp) rather than emitting
+            // garbage downstream.
+            if (candidateWrap.isEmpty() || candidateWrap == QLatin1String("clamp")
+                || candidateWrap == QLatin1String("repeat") || candidateWrap == QLatin1String("mirror")) {
+                wrap = candidateWrap;
+            } else {
+                qCWarning(lcRegistry) << "Surface effect" << effect.id << "runtime override wrap value" << candidateWrap
+                                      << "rejected (not clamp/repeat/mirror) — falling back to clamp";
+                wrap.clear();
+            }
         }
 
         if (path.isEmpty()) {

@@ -302,8 +302,8 @@ private Q_SLOTS:
         const QJsonObject wr = readJson(ConfigDefaults::windowRulesFilePath());
         QCOMPARE(wr.value(QStringLiteral("_version")).toInt(), 4);
 
-        // config.json stamped at the current schema version (the chain runs
-        // past v4 — v4→v5 seeds the decoration tree — to ConfigSchemaVersion).
+        // config.json stamped at the current schema version (migrateV3ToV4 also
+        // seeds the decoration tree before stamping ConfigSchemaVersion).
         const QJsonObject cfg = readJson(ConfigDefaults::configFilePath());
         QCOMPARE(cfg.value(QStringLiteral("_version")).toInt(), ConfigSchemaVersion);
 
@@ -815,10 +815,10 @@ private Q_SLOTS:
         // have been written — that's the data-loss class the guard exists for.
         QVERIFY(!QFile::exists(corruptPath));
 
-        // config.json's chain ran before finalize — migrateV3ToV4 stamps
-        // `_version=4` and stashes any disable-list / animation-rule data, then
-        // the chain continues to ConfigSchemaVersion (v4→v5 seeds the
-        // decoration tree). The chain steps' idempotency guards then
+        // config.json's chain ran before finalize — migrateV3ToV4 seeds the
+        // decoration tree and stamps `_version=4` (= ConfigSchemaVersion) and
+        // stashes any disable-list / animation-rule data. The chain steps'
+        // idempotency guards then
         // short-circuit the next attempt; the rebuild branch at finalize takes
         // over (windowrules.json doesn't exist after quarantine, so the
         // "already converted" probe returns false and rebuild retries from the

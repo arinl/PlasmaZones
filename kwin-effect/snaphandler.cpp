@@ -360,7 +360,7 @@ void SnapHandler::handleMinimizeChanged(const QString& windowId, const QString& 
     qCInfo(lcEffect) << "Snap: window" << (minimized ? "minimized, floating:" : "unminimized, unfloating:") << windowId
                      << "on" << screenId;
 
-    if (m_effect->m_daemonServiceRegistered) {
+    if (m_effect->isDaemonReady("snap minimize float")) {
         PhosphorProtocol::ClientHelpers::fireAndForget(m_effect, PhosphorProtocol::Service::Interface::WindowTracking,
                                                        QStringLiteral("setWindowFloatingForScreen"),
                                                        {windowId, screenId, minimized},

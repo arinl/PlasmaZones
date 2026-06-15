@@ -88,7 +88,10 @@ private Q_SLOTS:
         engine.refreshConfigFromSettings();
         QCoreApplication::processEvents();
 
-        QVERIFY(state->tiledWindowCount() >= 2);
+        // All three opened windows must now tile: raising the cap from 2 to 4
+        // backfills the previously-overflowed win3. >= 2 would also pass if the
+        // backfill did nothing, so assert the exact count the regression targets.
+        QCOMPARE(state->tiledWindowCount(), 3);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -319,10 +322,18 @@ private Q_SLOTS:
         engine.config()->innerGap = 8;
         engine.config()->outerGap = 12;
 
+        // The four rapid direct config mutations write straight to config(),
+        // bypassing the signal path, so none of them emits placementChanged.
         QCOMPARE(tilingSpy.count(), 0);
 
         engine.retile();
         QCoreApplication::processEvents();
+
+        // The explicit retile() IS what drives placement — proving the
+        // distinction the test name implies: rapid direct mutations are
+        // coalesced (zero emissions of their own) and only the deliberate
+        // retile reaches the renderer.
+        QVERIFY2(tilingSpy.count() > 0, "explicit retile() must drive placementChanged");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

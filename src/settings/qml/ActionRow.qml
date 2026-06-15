@@ -430,7 +430,7 @@ ColumnLayout {
     _colorParamEditor: Component {
         RowLayout {
             readonly property var _param: parent.modelData
-            readonly property string _hex: (row.action[_param.key] !== undefined && row.action[_param.key] !== "") ? String(row.action[_param.key]) : "#FF3DAEE9"
+            readonly property string _hex: (row.action[_param.key] !== undefined && row.action[_param.key] !== "") ? String(row.action[_param.key]) : (_param.default !== undefined ? String(_param.default) : "#FF3DAEE9")
 
             spacing: Kirigami.Units.smallSpacing
 

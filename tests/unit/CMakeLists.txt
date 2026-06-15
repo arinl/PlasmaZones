@@ -274,6 +274,13 @@ target_link_libraries(test_migration_v3_to_v4
     PRIVATE Qt6::Test Qt6::Core plasmazones_core PhosphorWindowRule::PhosphorWindowRule)
 add_test(NAME test_migration_v3_to_v4 COMMAND test_migration_v3_to_v4)
 
+# Decoration-tree seed (the per-surface tree seeded from the legacy border/shader
+# keys as part of the v3 -> v4 migration).
+add_executable(test_decoration_profile_seed config/test_decoration_profile_seed.cpp)
+target_link_libraries(test_decoration_profile_seed
+    PRIVATE Qt6::Test Qt6::Core Qt6::Gui plasmazones_core PhosphorSurface::PhosphorSurface)
+add_test(NAME test_decoration_profile_seed COMMAND test_decoration_profile_seed)
+
 # WindowRuleStore — daemon-side windowrules.json persistence + mutation API.
 add_executable(test_windowrule_store config/test_windowrule_store.cpp)
 target_link_libraries(test_windowrule_store

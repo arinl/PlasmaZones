@@ -182,24 +182,6 @@ ColumnLayout {
         return i18n("%1 ms", duration);
     }
 
-    // ── Imperative API ──────────────────────────────────────────────
-    /// Compute a randomized parameter map without writing it.
-    /// The per-event card uses this then routes through its batch
-    /// writer so a single setShaderOverride call carries every roll.
-    function randomizedShaderParams() {
-        return paramEditor.computeRandomized();
-    }
-
-    /// Update the lock state after a single-row toggle.
-    function lockedAfterToggle(paramId, locked) {
-        return paramEditor.lockedAfterToggle(paramId, locked);
-    }
-
-    /// Update the lock state after the toolbar's lock-all toggle.
-    function lockedAfterAllToggle(locked) {
-        return paramEditor.lockedAfterAllToggle(locked);
-    }
-
     spacing: Kirigami.Units.smallSpacing
 
     // ── Timing section ──────────────────────────────────────────────

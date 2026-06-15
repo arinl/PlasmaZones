@@ -26,6 +26,7 @@
 #include <QMatrix4x4>
 #include <QPoint>
 #include <QRectF>
+#include <QScopeGuard>
 #include <QSize>
 #include <QVector2D>
 #include <QVector4D>
@@ -167,6 +168,13 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChain(ShaderTransition& transit
     // keep apply()'s surface-extent quad deform off so the window is captured
     // 1:1 into the FBO rather than as the in-flight animation quad.
     m_capturingSnapshot = true;
+    // Reset the re-entrancy flag on every exit path. A leaked
+    // m_capturingSnapshot == true would suppress the passive border bind for
+    // every subsequent window paint, so guard it against an early return or a
+    // throw from the draw chain rather than relying on the explicit reset below.
+    auto resetCapture = qScopeGuard([this] {
+        m_capturingSnapshot = false;
+    });
     {
         KWin::RenderTarget renderTarget(&fbo);
         KWin::RenderViewport viewport(logicalGeometry, captureScale, renderTarget, QPoint());
@@ -190,6 +198,7 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChain(ShaderTransition& transit
         KWin::effects->drawWindow(renderTarget, viewport, w, captureMask, KWin::Region::infinite(), captureData);
         KWin::GLFramebuffer::popFramebuffer();
     }
+    resetCapture.dismiss();
     m_capturingSnapshot = false;
 
     setShader(w, animShader);
@@ -226,10 +235,11 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
     if (!w) {
         return false;
     }
+    const QString windowId = getWindowId(w);
     // Resolve the window's base pack — its compiled buffer passes drive this idle
     // multipass render. nullptr (compile failed/latched) or a single-pass pack
     // (empty bufferPasses) short-circuits: the caller renders single-pass.
-    CompiledSurfacePack* const pack = compiledPackForWindow(getWindowId(w));
+    CompiledSurfacePack* const pack = compiledPackForWindow(windowId);
     if (!pack || pack->bufferPasses.empty()) {
         return false;
     }
@@ -257,7 +267,7 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
     // Resolve the pack metadata by the window's base pack id (the registry effect
     // backing this window's compiled pack), not a single global selection.
     const PhosphorSurfaceShaders::SurfaceShaderEffect eff =
-        m_surfaceShaderRegistry.effect(m_windowBorders.value(getWindowId(w)).basePackId);
+        m_surfaceShaderRegistry.effect(m_windowBorders.value(windowId).basePackId);
     const qreal bufferScale = qBound(PhosphorSurfaceShaders::SurfaceShaderEffect::kMinBufferScale, eff.bufferScale,
                                      PhosphorSurfaceShaders::SurfaceShaderEffect::kMaxBufferScale);
     QSize bufferSize(qMax(1, qRound(textureSize.width() * bufferScale)),
@@ -265,12 +275,12 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
 
     // Get / (re)allocate the per-window targets. Reallocate the whole chain when
     // the full size changes — the buffer size is a fixed multiple of it.
-    SurfaceMultipassState& state = m_surfaceMultipass[getWindowId(w)];
+    SurfaceMultipassState& state = m_surfaceMultipass[windowId];
     const size_t passCount = pack->bufferPasses.size();
     if (state.size != textureSize || !state.surfaceTex || state.bufferTex.size() != passCount) {
         state.surfaceTex = KWin::GLTexture::allocate(GL_RGBA8, textureSize);
         if (!state.surfaceTex) {
-            m_surfaceMultipass.erase(getWindowId(w));
+            m_surfaceMultipass.erase(windowId);
             return false;
         }
         state.surfaceTex->setFilter(GL_LINEAR);
@@ -280,7 +290,7 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
         for (size_t i = 0; i < passCount; ++i) {
             std::unique_ptr<KWin::GLTexture> bt = KWin::GLTexture::allocate(GL_RGBA8, bufferSize);
             if (!bt) {
-                m_surfaceMultipass.erase(getWindowId(w));
+                m_surfaceMultipass.erase(windowId);
                 return false;
             }
             bt->setFilter(GL_LINEAR);
@@ -303,6 +313,12 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
         }
         setShader(w, nullptr);
         m_capturingSnapshot = true;
+        // Guard the re-entrancy flag against a throw from the draw chain — a
+        // leaked m_capturingSnapshot would corrupt every subsequent paint.
+        // Same pattern as renderSurfaceChain.
+        auto resetCapture = qScopeGuard([this] {
+            m_capturingSnapshot = false;
+        });
         {
             KWin::RenderTarget renderTarget(&fbo);
             KWin::RenderViewport viewport(logicalGeometry, captureScale, renderTarget, QPoint());
@@ -321,6 +337,7 @@ bool PlasmaZonesEffect::renderSurfaceBufferPasses(KWin::EffectWindow* w, qreal s
             KWin::effects->drawWindow(renderTarget, viewport, w, captureMask, KWin::Region::infinite(), captureData);
             KWin::GLFramebuffer::popFramebuffer();
         }
+        resetCapture.dismiss();
         m_capturingSnapshot = false;
         // The border shader is re-applied by drawWindow's own ShaderBinder after
         // this returns; restore the redirect's bound shader to it so the main
@@ -544,6 +561,12 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChainComposite(KWin::EffectWind
         }
         setShader(w, nullptr);
         m_capturingSnapshot = true;
+        // Guard the re-entrancy flag against a throw from the draw chain — a
+        // leaked m_capturingSnapshot would corrupt every subsequent paint.
+        // Same pattern as renderSurfaceChain.
+        auto resetCapture = qScopeGuard([this] {
+            m_capturingSnapshot = false;
+        });
         {
             KWin::RenderTarget renderTarget(&fbo);
             KWin::RenderViewport viewport(logicalGeometry, captureScale, renderTarget, QPoint());
@@ -557,11 +580,16 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChainComposite(KWin::EffectWind
             KWin::effects->drawWindow(renderTarget, viewport, w, captureMask, KWin::Region::infinite(), captureData);
             KWin::GLFramebuffer::popFramebuffer();
         }
+        resetCapture.dismiss();
         m_capturingSnapshot = false;
         setShader(w, surfacePresentShader());
     }
 
     // ── Step 2: fold each pack over the running composite ────────────────────
+    // Invariant: each pk is consumed entirely within its own iteration. Never
+    // hoist a pk across iterations — compiledPack() may insert into the
+    // m_compiledPacks unordered_map and rehash, invalidating any pointer a
+    // prior iteration returned.
     int src = 0;
     for (int k = 0; k < chain.size(); ++k) {
         CompiledSurfacePack* const pk = compiledPack(chain.at(k), profile);

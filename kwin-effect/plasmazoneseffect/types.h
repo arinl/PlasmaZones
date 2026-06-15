@@ -32,7 +32,7 @@ namespace PlasmaZones {
 /// captured window surface (uTexture0) plus any prior buffer outputs
 /// (iChannel0..N-1) and writes into its own FBO; the main effect.frag then
 /// samples the final buffer output(s) as iChannel0..3. Compiled in
-/// borderShader() right after the main pack shader, cleared (fail-closed) if any
+/// compiledPack() right after the main pack shader, cleared (fail-closed) if any
 /// buffer pass fails to compile so the pack degrades to single-pass. The vector
 /// of these is shared by every decorated window — the per-window FBO targets
 /// live in SurfaceMultipassState.

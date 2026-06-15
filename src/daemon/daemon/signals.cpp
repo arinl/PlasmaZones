@@ -931,23 +931,27 @@ void Daemon::applyStartupInsetCorrection()
 
 void Daemon::reapplyBorderInsets()
 {
-    // Re-resolve every snapped window's frame against the CURRENT border settings.
+    // Re-resolve every snapped window's frame against the CURRENT settings.
     // resnapCurrentAssignments recomputes each target via
     // WindowTrackingService::resolveZoneGeometry, which applies
-    // PhosphorGeometry::insetRect — so a window placed under the old settings (the
-    // un-inset full-zone rect, or a stale inset width) is corrected to the right
-    // frame. No-op (and a single suppressed feedback) when there are no snapped
-    // windows. Drives both the one-shot startup correction and the debounced
-    // runtime path (border settings changed via the KCM), since the inset is read
-    // live and nothing else resnaps/retiles on a pure border-setting change.
+    // PhosphorGeometry::insetRect. The inset is pinned to 0 today (see
+    // IGeometryResolver::snapBorderInset), so on a pure border-setting change the
+    // recomputed frame is identical and this resnap is currently inert — it is
+    // retained as part of the reserved inset seam (a future non-zero inset would
+    // make a border-setting change move the frame, which nothing else resnaps).
+    // No-op (and a single suppressed feedback) when there are no snapped windows.
+    // Drives both the one-shot startup correction and the debounced runtime path
+    // (border settings changed via the KCM).
     if (m_snapAdaptor && m_snapEngine) {
         ++m_suppressResnapOsd; // resnapCurrentAssignments emits one feedback; additive so any in-flight credit survives
         m_snapAdaptor->resnapCurrentAssignments();
     }
 
-    // Mirror for autotile: retile every autotile screen so applyTiling re-runs
-    // its per-tile border inset against the current autotile show-border state.
-    // Guarded on isEnabled() so this is inert when autotile is off.
+    // Mirror for autotile: retile every autotile screen so applyTiling re-resolves
+    // each tile against current settings. applyTiling no longer applies a per-tile
+    // border inset (the inset is 0 today), so this is inset-inert and retained
+    // alongside the seam. Guarded on isEnabled() so it is also inert when autotile
+    // is off.
     if (m_autotileEngine && m_autotileEngine->isEnabled()) {
         m_autotileEngine->retile();
     }

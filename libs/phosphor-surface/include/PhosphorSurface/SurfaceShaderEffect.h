@@ -158,7 +158,7 @@ struct PHOSPHORSURFACE_EXPORT SurfaceShaderEffect
                   "kMinBufferScale must be positive and strictly less than kMaxBufferScale");
 
     /// Declared shader inputs beyond the standard surface set
-    /// (uTexture0, uSurfaceSize, uSurfaceColor, etc.). Each entry maps
+    /// (uTexture0, uSurfaceSize, uSurfaceFocused, etc.). Each entry maps
     /// `parameterId → { type, default, min, max, ... }`. Field names
     /// mirror the regular shader pack format
     /// (`AnimationShaderEffect::ParameterInfo` /

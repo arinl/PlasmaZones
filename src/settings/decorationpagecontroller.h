@@ -24,8 +24,8 @@ class ISettings;
 ///
 /// ## Scope: PER-SURFACE chains with walk-up inheritance
 ///
-/// Where `SurfaceShaderPageController` (the flat page this replaces)
-/// selected ONE decoration pack for every window, this controller edits a
+/// Where the previous flat surface-shader page selected ONE decoration pack
+/// for every window, this controller edits a
 /// `PhosphorSurfaceShaders::DecorationProfileTree` — a hierarchical store
 /// of `DecorationProfile`s keyed on the dot-path surface namespace
 /// (`window.tiled`, `osd`, `popup.snapAssist`, …). Each profile carries an
@@ -50,7 +50,7 @@ class ISettings;
 /// `SettingsController`'s meta-object loop into the active page's dirty
 /// flag — so this controller carries NO per-page staged state:
 /// `isDirty()` / `apply()` / `discard()` are no-ops, exactly like
-/// `SurfaceShaderPageController` / `GeneralPageController`. Apply /
+/// `GeneralPageController`. Apply /
 /// Discard / Defaults are driven globally by `SettingsController`.
 class DecorationPageController : public PhosphorControl::PageController
 {

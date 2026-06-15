@@ -917,20 +917,20 @@ private:
     // After geometry updates settle, request KWin effect to re-apply window positions (panel editor fix)
     QTimer m_reapplyGeometriesTimer;
 
-    // Startup inset correction. The per-window border inset (PhosphorGeometry::
-    // insetRect, applied by both resolveZoneGeometry and applyTiling) is resolved
-    // live from settings, but the FIRST geometry the KWin effect applies to
-    // session-restored windows on login can be authored before the daemon is
-    // fully queryable for the snap/autotile show-border state — so windows land
-    // filling the full zone instead of inset by the border width. (A manual
-    // daemon restart resolves correctly because the windows are already present
-    // and resnapped against fully loaded settings.) Once the first restore commit
-    // lands on a started daemon, arm a single-shot debounce; on timeout, re-resolve
-    // every snapped window's geometry (inset-aware via resnapCurrentAssignments)
-    // and retile autotile screens once, so both modes pick up the correct inset.
-    // Runs exactly once per session; the debounce coalesces the whole login
-    // restore burst so the correction does not fight the in-flight per-window
-    // restores.
+    // Startup inset correction (reserved-seam machinery). The per-window border
+    // inset (PhosphorGeometry::insetRect, applied by resolveZoneGeometry and
+    // applyTiling) is pinned to 0 in all configurations today — see
+    // IGeometryResolver::snapBorderInset — so this correction is currently inert
+    // for its original purpose (re-insetting session-restored windows once the
+    // snap/autotile show-border state finished loading; with inset 0 windows
+    // correctly fill the full zone and there is nothing to correct). It is
+    // retained alongside the inset seam: if a future per-window-border design
+    // reintroduces a non-zero inset, the login-restore burst can again author
+    // geometry before the daemon is fully queryable, and this single-shot
+    // debounced pass re-resolves every snapped window (inset-aware via
+    // resnapCurrentAssignments) and retiles autotile screens once. Runs exactly
+    // once per session; the debounce coalesces the whole restore burst so it does
+    // not fight the in-flight per-window restores.
     QTimer m_startupInsetCorrectionTimer;
     bool m_startupInsetCorrectionDone = false;
     void scheduleStartupInsetCorrection();

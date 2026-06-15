@@ -719,6 +719,13 @@ PlasmaZonesEffect::PlasmaZonesEffect()
     connect(serviceWatcher, &QDBusServiceWatcher::serviceUnregistered, this, [this]() {
         qCInfo(lcEffect) << "Daemon service unregistered";
         m_daemonServiceRegistered = false;
+        // Drop the virtual-screen readiness immediately. The defs from the
+        // previous daemon cycle are now stale; without clearing the flag here,
+        // the windowFrameGeometryChanged VS-crossing detector would keep
+        // resolving against stale virtual-screen boundaries during the gap
+        // between unregistration and the next daemon's fetch. continueDaemonReady
+        // setup re-clears and refetches on bringup; this closes the gap before it.
+        m_virtualScreensReady = false;
         // Also clear the bridge-registration in-flight gate. Without
         // this, a daemon-restart racing the in-flight registerBridge
         // reply leaves the gate set: the new daemon's `daemonReady`

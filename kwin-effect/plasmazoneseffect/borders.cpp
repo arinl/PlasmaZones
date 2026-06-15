@@ -225,12 +225,12 @@ void PlasmaZonesEffect::updateAllBorders()
 {
     clearAllBorders();
 
-    // Iterate all effect windows and create borders for any window managed by
-    // a mode (autotile or snap) that currently shows borders, OR matched by a
-    // per-window border rule (which can draw on an otherwise-borderless /
-    // floating window). updateWindowBorder self-gates on the merged effective
-    // appearance, so calling it when rules exist is safe; reconcile the rule
-    // title-bar override in the same pass so it tracks context changes.
+    // Iterate all effect windows and (re-)create borders. updateWindowBorder
+    // fully self-gates now — the app-window filter (shouldHandleWindow) plus the
+    // resolved decoration chain decide whether a window decorates — so border
+    // creation is driven solely by that gate, NOT by tiling/snap membership or
+    // by whether any animation rule exists. The rule set is still consulted only
+    // for the title-bar override reconcile below.
     const bool haveRules = !m_shaderManager.animationRuleSet().isEmpty();
     const auto windows = KWin::effects->stackingOrder();
     for (KWin::EffectWindow* w : windows) {
@@ -247,23 +247,19 @@ void PlasmaZonesEffect::updateAllBorders()
         // activation, and border refresh.
         m_decorationManager->resyncWindow(wid);
         // Border overlays are visual, so only build them for windows on the
-        // current desktop. Title-bar hiding (setNoBorder) is a persistent
-        // decoration-state change that survives desktop switches, so reconcile
-        // it for ALL windows the rule may match — otherwise a SetHideTitleBar
-        // rule added while the matched window sits on another virtual desktop
-        // would not take effect until that window is next activated.
-        // Pre-filter on MEMBERSHIP (ignoring the legacy mode showBorder gate) so a
-        // tiled/snapped member whose tree profile turns the border ON is picked up
-        // even though the old per-mode showBorder is off. updateWindowBorder
-        // self-gates on the resolved profile's showBorder, so this only decides
-        // WHICH windows are worth re-resolving: members + (when rules exist)
-        // rule-matchable floating windows. A floating window with no rule resolves
-        // window.floating (showBorder=false by default) and is skipped here.
-        const bool isMember = AutotileStateHelpers::isTiledWindow(m_autotileHandler->borderState(), wid)
-            || m_snapHandler->isTiledWindow(wid);
-        if (w->isOnCurrentDesktop() && (haveRules || isMember)) {
+        // current desktop. Every on-desktop window is re-resolved; the gate
+        // inside updateWindowBorder (app-window filter + resolved chain) decides
+        // whether it actually decorates, so a floating application window picks
+        // up the window-node border default regardless of tiling/snap membership
+        // or whether any animation rule exists.
+        if (w->isOnCurrentDesktop()) {
             updateWindowBorder(wid, w);
         }
+        // Title-bar hiding (setNoBorder) is a persistent decoration-state change
+        // that survives desktop switches, so reconcile the rule override for ALL
+        // windows the rule may match — otherwise a SetHideTitleBar rule added
+        // while the matched window sits on another virtual desktop would not take
+        // effect until that window is next activated.
         if (haveRules) {
             reconcileRuleHiddenTitleBar(wid, w);
         }

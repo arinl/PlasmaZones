@@ -152,6 +152,12 @@ public:
     Q_INVOKABLE void setChainParam(const QString& path, const QString& packId, const QString& paramId,
                                    const QVariant& value);
 
+    /// Merge a whole map of per-pack parameter overrides at @p path in one
+    /// write: parameters[packId][k] = v for every (k, v) in @p params. Used
+    /// by the editor's Randomize action so a single roll persists as one
+    /// tree write instead of one per parameter. For "" edits the baseline.
+    Q_INVOKABLE void setChainParams(const QString& path, const QString& packId, const QVariantMap& params);
+
     /// Clear every per-pack parameter override at @p path (engages an
     /// empty parameters map — "use all pack defaults"). For "" edits the
     /// baseline.

@@ -46,6 +46,7 @@ ColumnLayout {
 
     signal chainChangeRequested(var newChain)
     signal paramChangeRequested(string packId, string paramId, var value)
+    signal paramsRandomizeRequested(string packId, var rolled)
 
     function _effectFor(packId) {
         if (!root.availableShaders)
@@ -170,23 +171,29 @@ ColumnLayout {
 
             // ── Per-pack parameters ──────────────────────────────────────
             // Shown inline whenever the pack declares parameters (and we're
-            // editable) — matching the always-visible shader editor in
-            // AnimationProfileEditor, so per-pack settings are discoverable
-            // and editable in place rather than behind a toggle.
-            PZCommon.ShaderParameterEditor {
+            // editable). Reuses the shared ShaderParamsEditor — the same
+            // editor + colour dialog + lock / randomize host the animation
+            // profile editor and App-Rules action row use — so the Border
+            // pack's colour swatches open the picker and lock / randomize
+            // behave identically to the animation pages.
+            PZCommon.ShaderParamsEditor {
                 Layout.fillWidth: true
                 Layout.leftMargin: Kirigami.Units.largeSpacing
                 visible: !root.readOnly && packDelegate._schema.length > 0
 
                 compact: true
                 enableGroups: true
-                enableLocking: false
-                enableRandomize: false
-                enableImage: true
+                enableLocking: true
+                enableRandomize: true
+                enableImage: false
                 parameters: packDelegate._schema
                 currentValues: packDelegate._values
-                onValueChanged: function (id, value) {
-                    root.paramChangeRequested(packDelegate.modelData, id, value);
+                effectId: packDelegate.modelData
+                onValueChanged: function (effectId, paramId, value) {
+                    root.paramChangeRequested(effectId, paramId, value);
+                }
+                onRandomizeRequested: function (rolled) {
+                    root.paramsRandomizeRequested(packDelegate.modelData, rolled);
                 }
             }
         }

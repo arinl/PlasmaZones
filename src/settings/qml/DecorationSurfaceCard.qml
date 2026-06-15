@@ -189,7 +189,7 @@ Item {
 
                 Label {
                     Layout.fillWidth: true
-                    text: i18n("Expand a pack to edit its settings (e.g. the Border pack's width, corner radius and colours). A surface shows a border only when the Border pack is in its chain.")
+                    text: i18n("Each pack's settings (e.g. the Border pack's width, corner radius and colours) are shown beneath it. A surface shows a border only when the Border pack is in its chain.")
                     wrapMode: Text.WordWrap
                     opacity: 0.8
                 }
@@ -206,6 +206,10 @@ Item {
                     onParamChangeRequested: function (packId, paramId, value) {
                         if (root.bridge)
                             root.bridge.setChainParam(root.surfacePath, packId, paramId, value);
+                    }
+                    onParamsRandomizeRequested: function (packId, rolled) {
+                        if (root.bridge)
+                            root.bridge.setChainParams(root.surfacePath, packId, rolled);
                     }
                 }
 

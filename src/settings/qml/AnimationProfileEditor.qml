@@ -3,7 +3,6 @@
 
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Window
 import org.kde.kirigami as Kirigami
@@ -18,7 +17,8 @@ import org.plasmazones.common as PZCommon
  * widget tree the per-event card and the App Rules form both need
  * (CurveThumbnail + Customize button → CurveEditorDialog,
  * timing-mode combo, duration slider, CategoryMenuButton +
- * ShaderParameterEditor + ColorDialog).
+ * ShaderParamsEditor — the shared editor + colour dialog + lock /
+ * randomize host).
  *
  * The editor is intentionally persistence-agnostic: it emits
  * @c valueChanged() whenever any tracked field is touched, and the
@@ -62,7 +62,10 @@ ColumnLayout {
     /// UI affordance only — not persisted. The per-event card
     /// rewires this on shader switch (same-named ids in different
     /// shader schemas are unrelated); App Rules leaves locking off.
-    property var lockedShaderParams: ({})
+    /// Aliased onto the shared ShaderParamsEditor's `lockedParams`, which
+    /// owns the lock map and self-updates it; assigning here (the card's
+    /// reset-on-shader-change) writes straight through.
+    property alias lockedShaderParams: paramEditor.lockedParams
     // ── Configuration inputs ────────────────────────────────────────
     /// Title for the curve dialog ("Customize Curve: <eventLabel>").
     property string eventLabel: ""
@@ -369,7 +372,7 @@ ColumnLayout {
 
     // Inline parameter editor surfaces only when an effect is
     // assigned and that effect declares parameters.
-    PZCommon.ShaderParameterEditor {
+    PZCommon.ShaderParamsEditor {
         id: paramEditor
 
         readonly property var _paramSchema: {
@@ -381,43 +384,30 @@ ColumnLayout {
         visible: root.shaderLegSupported && root.showShaderSection && root.shaderEffectId.length > 0 && _paramSchema.length > 0
         parameters: _paramSchema
         currentValues: root.shaderParams
-        lockedParams: root.lockedShaderParams
+        effectId: root.shaderEffectId
         enableLocking: root.enableLocking
         enableRandomize: root.enableRandomize
-        enableGroups: true
         enableImage: root.enableImage
         compact: true
-        onValueChanged: function (paramId, value) {
-            root.shaderParamWriteRequested(root.shaderEffectId, paramId, value);
+        // The shared editor owns the lock map (aliased onto
+        // `lockedShaderParams`) and hosts the colour dialog, so only the
+        // value-write and randomize signals need handling here. The lock
+        // signals are re-emitted for API parity; current consumers ignore
+        // them (lock state is working-state only).
+        onValueChanged: function (effectId, paramId, value) {
+            root.shaderParamWriteRequested(effectId, paramId, value);
         }
         onLockToggled: function (paramId, locked) {
-            // Editor owns `lockedShaderParams` — self-update before
-            // emitting so subscribers reading the property see the
-            // post-toggle map. Consumers that just want to persist the
-            // lock state (per-event card) connect to the signal; pure
-            // staging consumers (App Rules) need no handler at all.
-            root.lockedShaderParams = paramEditor.lockedAfterToggle(paramId, locked);
             root.lockToggleRequested(paramId, locked);
         }
-        onLockAllRequested: function (lock) {
-            root.lockedShaderParams = paramEditor.lockedAfterAllToggle(lock);
-            root.lockAllToggleRequested(lock);
+        onLockAllRequested: function (locked) {
+            root.lockAllToggleRequested(locked);
         }
-        onRandomizeRequested: {
-            // Roll once, stage on the editor (so the UI updates), and
-            // emit with the rolled map so a persisting consumer can
-            // batch the per-param writes through a single controller
-            // call without re-rolling.
-            const rolled = paramEditor.computeRandomized();
+        onRandomizeRequested: function (rolled) {
+            // Stage the rolled map so the UI updates before the consumer's
+            // persistence round-trips it back through `shaderParams`.
             root.shaderParams = rolled;
             root.randomizeRequested(rolled);
-        }
-        onRequestColorPicker: function (paramId, paramName, current) {
-            colorDialog.effectId = root.shaderEffectId;
-            colorDialog.paramId = paramId;
-            colorDialog.paramName = paramName;
-            colorDialog.selectedColor = current;
-            colorDialog.open();
         }
     }
 
@@ -445,30 +435,6 @@ ColumnLayout {
             root.springZeta = zeta;
             root.timingMode = CurvePresets.timingModeSpring;
             root.valueChanged();
-        }
-    }
-
-    // QtQuick.Dialogs.ColorDialog wraps the OS-native colour picker —
-    // runs in its own platform window, no `parent` assignment needed
-    // (and none accepted). Carries `effectId` so a registry refresh
-    // mid-pick can't retarget the write at a different effect's param
-    // map (the per-event card consumes that field via the param-write
-    // signal handler).
-    ColorDialog {
-        id: colorDialog
-
-        options: ColorDialog.ShowAlphaChannel
-
-        property string effectId: ""
-        property string paramId: ""
-        property string paramName: ""
-
-        title: paramName.length > 0 ? i18nc("@title:window", "Choose %1", paramName) : i18nc("@title:window", "Pick color")
-        onAccepted: {
-            if (paramId === "" || effectId === "")
-                return;
-
-            root.shaderParamWriteRequested(effectId, paramId, selectedColor.toString());
         }
     }
 }

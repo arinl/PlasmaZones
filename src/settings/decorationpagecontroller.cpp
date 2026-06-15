@@ -174,6 +174,23 @@ void DecorationPageController::setChainParam(const QString& path, const QString&
     writeDirectProfile(m_settings, tree, path, profile);
 }
 
+void DecorationPageController::setChainParams(const QString& path, const QString& packId, const QVariantMap& params)
+{
+    if (!m_settings || packId.isEmpty() || params.isEmpty())
+        return;
+    if (!path.isEmpty() && !PhosphorSurfaceShaders::decorationSurfaceSupported(path))
+        return;
+    DecorationProfileTree tree = readTree(m_settings);
+    DecorationProfile profile = directProfileAt(tree, path);
+    QVariantMap allParams = profile.parameters.value_or(QVariantMap());
+    QVariantMap packParams = allParams.value(packId).toMap();
+    for (auto it = params.constBegin(); it != params.constEnd(); ++it)
+        packParams.insert(it.key(), it.value());
+    allParams.insert(packId, packParams);
+    profile.parameters = allParams;
+    writeDirectProfile(m_settings, tree, path, profile);
+}
+
 void DecorationPageController::clearChainParams(const QString& path)
 {
     if (!m_settings)

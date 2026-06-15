@@ -85,7 +85,7 @@ SettingsFlickable {
 
                 Label {
                     Layout.fillWidth: true
-                    text: i18n("Ordered list of decoration shader packs applied to every surface. Each pack draws on top of the previous one. Expand a pack to edit its settings — for example, the Border pack's width, corner radius and colours.")
+                    text: i18n("Ordered list of decoration shader packs applied to every surface. Each pack draws on top of the previous one. Each pack's settings (for example, the Border pack's width, corner radius and colours) are shown beneath it.")
                     wrapMode: Text.WordWrap
                     opacity: 0.8
                 }
@@ -102,6 +102,10 @@ SettingsFlickable {
                     onParamChangeRequested: function (packId, paramId, value) {
                         if (page.bridge)
                             page.bridge.setChainParam(page.surfacePath, packId, paramId, value);
+                    }
+                    onParamsRandomizeRequested: function (packId, rolled) {
+                        if (page.bridge)
+                            page.bridge.setChainParams(page.surfacePath, packId, rolled);
                     }
                 }
 

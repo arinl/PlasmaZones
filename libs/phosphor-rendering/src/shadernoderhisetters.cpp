@@ -152,10 +152,11 @@ void ShaderNodeRhi::setCustomColor(int index, const QColor& color)
 
 void ShaderNodeRhi::setAppField0(int value)
 {
-    if (m_baseUniforms.appField0 == value) {
+    if (m_appField0 == value) {
         return;
     }
-    m_baseUniforms.appField0 = value;
+    m_appField0 = value;
+    m_uboProfile->setAppField0(value);
     m_uniformsDirty = true;
     // Use the granular K_APP_FIELDS region (8 bytes) instead of the full
     // scene header (~512 bytes). Phosphor updates these on every hover.
@@ -164,10 +165,11 @@ void ShaderNodeRhi::setAppField0(int value)
 
 void ShaderNodeRhi::setAppField1(int value)
 {
-    if (m_baseUniforms.appField1 == value) {
+    if (m_appField1 == value) {
         return;
     }
-    m_baseUniforms.appField1 = value;
+    m_appField1 = value;
+    m_uboProfile->setAppField1(value);
     m_uniformsDirty = true;
     m_appFieldsDirty = true;
 }

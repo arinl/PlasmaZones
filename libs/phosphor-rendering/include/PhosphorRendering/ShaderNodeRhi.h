@@ -6,6 +6,7 @@
 #include <PhosphorRendering/phosphorrendering_export.h>
 
 #include <PhosphorShaders/BaseUniforms.h>
+#include <PhosphorShaders/IUboProfile.h>
 #include <PhosphorShaders/IUniformExtension.h>
 #include <PhosphorShaders/ShaderEntryPoint.h>
 
@@ -114,7 +115,16 @@ constexpr bool isConsumerBinding(int binding) noexcept
 class PHOSPHORRENDERING_EXPORT ShaderNodeRhi : public QSGRenderNode
 {
 public:
-    explicit ShaderNodeRhi(QQuickItem* item);
+    /// @param item    Owning QQuickItem (must outlive the node until
+    ///                invalidateItem() is called).
+    /// @param profile Pluggable UBO profile. The default (nullptr) installs a
+    ///                BaseUniformProfile so every existing caller — including
+    ///                ZoneShaderNodeRhi's `ShaderNodeRhi(item)` forward — keeps
+    ///                the legacy 672-byte overlay/animation UBO unchanged. A
+    ///                future surface-decoration runtime passes a
+    ///                SurfaceUniformProfile here to reuse the engine with the
+    ///                leaner surface UBO.
+    explicit ShaderNodeRhi(QQuickItem* item, std::unique_ptr<PhosphorShaders::IUboProfile> profile = nullptr);
     ~ShaderNodeRhi() override;
 
     /**
@@ -298,7 +308,10 @@ private:
     bool ensureBufferTarget();
     bool ensureDummyChannelResources(QRhi* rhi);
     bool ensureBufferSampler(QRhi* rhi, int index);
-    void syncBaseUniforms();
+    /// Snapshot the node's live members into a UboFrameState and hand it to the
+    /// installed UBO profile's fill(). @p rhi supplies the NDC Y-orientation
+    /// the profile folds into qt_Matrix.
+    void syncBaseUniforms(QRhi* rhi);
     void uploadDirtyTextures(QRhi* rhi, QRhiCommandBuffer* cb);
     /**
      * Append the extension region to a resource update batch.
@@ -454,13 +467,20 @@ private:
     bool m_sceneDataDirty = true; ///< Scene header (resolution, mouse, date, params) changed
     bool m_appFieldsDirty = false; ///< Only appField0/appField1 changed (8-byte upload, not full scene header)
     bool m_didFullUploadOnce = false;
-    /// Epoch-ms of the last iDate recomputation. Throttles
-    /// QDateTime::currentDateTime() to once per second during mouse-driven
-    /// scene-header churn (iDate only advances at 1 Hz anyway).
-    qint64 m_lastDateRefreshMs = 0;
 
-    // ── Base Uniforms ──────────────────────────────────────────────────
-    PhosphorShaders::BaseUniforms m_baseUniforms = {};
+    // ── UBO Profile (pluggable uniform buffer concern) ─────────────────
+    /// Owns the concrete UBO struct, its byte size, per-frame fill, and the
+    /// dirty-region dispatch. Installed by the ctor (BaseUniformProfile by
+    /// default). The iDate 1 Hz throttle's lastDateRefreshMs lives inside the
+    /// profile now.
+    std::unique_ptr<PhosphorShaders::IUboProfile> m_uboProfile;
+
+    /// Node-side mirrors of the consumer escape-hatch int slots. The profile
+    /// owns the authoritative bytes (and may not expose a getter), so these
+    /// mirrors provide the cheap value-changed gate setAppField0/1 need to
+    /// avoid dirtying the UBO when nothing actually changed.
+    int m_appField0 = 0;
+    int m_appField1 = 0;
 
     // Full-precision elapsed seconds (double). Split into iTime (wrapped lo) +
     // iTimeHi (wrap offset) at upload.

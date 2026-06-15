@@ -132,13 +132,15 @@ vec2 surfacePixel(vec2 uv) {
 #endif
 }
 
-// The surface's own texel at `uv`, upright on both runtimes.
+// The surface's own texel at `uv`, upright on both runtimes. Both runtimes end
+// up sampling with the incoming `uv` directly: the compositor delivers a Y-up
+// vTexCoord against its bottom-origin redirect FBO, and the daemon delivers a
+// Y-down vTexCoord against Qt-RHI's top-origin texture — either way `uv` already
+// addresses the texel upright (the daemon path lets surface.vert's qt_Matrix
+// carry the per-backend NDC correction, mirroring animation_uniforms.glsl's
+// surfaceColor daemon branch, rather than flipping here).
 vec4 surfaceTexel(vec2 uv) {
-#ifdef PLASMAZONES_KWIN
     return texture(uTexture0, uv);
-#else
-    return texture(uTexture0, vec2(uv.x, 1.0 - uv.y));
-#endif
 }
 
 #endif // PLASMAZONES_SURFACE_UNIFORMS_GLSL

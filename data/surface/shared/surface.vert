@@ -6,22 +6,27 @@
 // surface_uniforms.glsl) so it ships alongside the include and resolves from the
 // SurfaceShaderItem / kwin-effect include paths with no per-pack vertex shader.
 //
-// Layer-composited (NOT direct-to-window), like data/shaders/shared/zone.vert.
-// The daemon hosts a surface pack by sampling a rendered surface's own layer
-// texture into uTexture0 and re-rendering it through this quad inside a Qt Quick
-// scene graph; Qt's compositor applies its own NDC/orientation correction when
-// it composites this item's node, so this stage must NOT multiply by qt_Matrix.
-// Emitting the bare clip-space position keeps the quad upright on every backend
-// (a qt_Matrix multiply here would double-correct and flip the result on
-// Y-up-NDC backends like OpenGL). The fragment stage's surfaceTexel() helper
-// (surface_uniforms.glsl) owns the per-runtime uTexture0 Y-flip, so the sampled
-// content lands upright regardless of this pass-through.
+// DIRECT-TO-SCENE, like data/animations/shared/animation.vert (NOT layer-
+// composited like zone.vert). The daemon hosts a surface pack with a
+// SurfaceShaderItem that is a normal scene item (its SOURCE card is captured to
+// an FBO; the shader item itself is not layer.enabled), exactly as
+// SurfaceAnimator renders its transition shaders. Qt-RHI does not normalise the
+// NDC Y of geometry the shader emits, so this stage MUST multiply by qt_Matrix:
+// it is identity on Y-down backends (Vulkan) and a Y-flip on Y-up-in-NDC
+// backends (OpenGL), keeping the quad upright on both. (qt_Matrix lives in the
+// daemon UBO branch of surface_uniforms.glsl; SurfaceUniformProfile fills it.)
+//
+// vTexCoord is the Y-down screen UV the fragment contract expects: the daemon's
+// Qt-RHI uTexture0 is top-origin, so surfaceTexel() samples it directly with no
+// flip (mirrors animation_uniforms.glsl::surfaceColor's daemon branch).
 //
 // Unlike zone.vert this does NOT #include <common.glsl> and emits NO vFragCoord:
 // the surface fragment contract reads pixel coordinates via surfacePixel(uv)
 // (driven by uSurfaceSize), not a vertex-supplied vFragCoord varying.
 
 #version 450
+
+#include <surface_uniforms.glsl>
 
 layout(location = 0) in vec2 position;
 layout(location = 1) in vec2 texCoord;
@@ -30,5 +35,5 @@ layout(location = 0) out vec2 vTexCoord;
 
 void main() {
     vTexCoord = texCoord;
-    gl_Position = vec4(position, 0.0, 1.0);
+    gl_Position = qt_Matrix * vec4(position, 0.0, 1.0);
 }

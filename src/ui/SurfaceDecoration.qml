@@ -96,7 +96,27 @@ Item {
 
     function _resolveAnchor() {
         shaderAnchorItem = contentItem ? _findShaderAnchor(contentItem) : null;
+        _applyAnchorRouting();
     }
+
+    // Compose with SurfaceAnimator instead of competing with it. SurfaceAnimator
+    // and this decoration both want to capture (hideSource) and re-render the
+    // surface; if both target the SAME raw card the static decoration smothers
+    // the show/hide transition. So when decoration is ACTIVE we route the
+    // animator to capture the DECORATION's output (the `decoration` item below,
+    // which carries shaderAnchor) and DEMOTE the raw card's shaderAnchor PROPERTY
+    // so the animator (which matches that property — see
+    // findShaderAnchorRecursive) skips it. We still capture the raw card here via
+    // our own stored reference. Net chain: raw card → decoration → animator, so
+    // the transition runs OVER the decorated surface (the daemon analogue of the
+    // compositor's uSurfaceLayer compose). When INACTIVE we restore the raw
+    // card's property so the animator animates the bare card exactly as before.
+    function _applyAnchorRouting() {
+        if (root.shaderAnchorItem)
+            root.shaderAnchorItem.shaderAnchor = !root.decorationActive;
+    }
+
+    onDecorationActiveChanged: root._applyAnchorRouting()
 
     // Depth-first search for the shaderAnchor. Mirrors SurfaceAnimator's
     // findShaderAnchorRecursive (libs/phosphor-animation): matches EITHER a
@@ -169,6 +189,15 @@ Item {
         // deep inside the loaded content; mapToItem walks the transform chain so
         // the decoration lands exactly over the card regardless of nesting.
         readonly property point anchorOrigin: (root.decorationActive && root.shaderAnchorItem) ? root.shaderAnchorItem.mapToItem(root, 0, 0) : Qt.point(0, 0)
+
+        // SurfaceAnimator anchor (compose — see _applyAnchorRouting). When
+        // decoration is active this item IS the surface the animator captures and
+        // animates; the raw card's shaderAnchor is demoted so the animator picks
+        // this one. shaderContentRect mirrors the raw card's frame rect (this item
+        // is sized to and positioned over the raw anchor 1:1, so the same local
+        // coords apply) — the animator uses it for its card-space remap.
+        property bool shaderAnchor: root.decorationActive
+        property rect shaderContentRect: (root.shaderAnchorItem && root.shaderAnchorItem.shaderContentRect !== undefined) ? root.shaderAnchorItem.shaderContentRect : Qt.rect(0, 0, width, height)
 
         visible: root.decorationActive
         x: anchorOrigin.x

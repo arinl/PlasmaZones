@@ -119,6 +119,21 @@ void PlasmaZonesEffect::slotWindowAdded(KWin::EffectWindow* w)
     QString windowId = getWindowId(w);
     m_navigationHandler->syncFloatingStateForWindow(windowId);
 
+    // Create this window's border NOW so a freshly-opened window (a floating app
+    // window is eligible for the window-node border default) gets its decoration
+    // on first composite, not only after the next updateAllBorders (which used to
+    // be the sole trigger — fired on focus / desktop change, hence the "border
+    // only appears after a focus change" bug). updateWindowBorder self-gates
+    // (app-window filter + resolved chain) and is idempotent, so the snap /
+    // autotile paths re-running it later is harmless. If the window.open
+    // transition above already took the shader slot, reconcileBorderShader just
+    // records the WindowBorder entry and defers the shader to the transition-end
+    // re-apply (which needs that entry to exist). Current-desktop only, matching
+    // updateAllBorders (borders are visual; desktopChanged rebuilds the rest).
+    if (w->isOnCurrentDesktop()) {
+        updateWindowBorder(windowId, w);
+    }
+
     bool onAutotileScreen = m_autotileHandler->isAutotileScreen(getWindowScreenId(w));
 
     // First-frame suppression: KWin places a new window at its centred

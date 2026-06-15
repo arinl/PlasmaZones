@@ -74,7 +74,7 @@ class RegistryShaderPreviewBackend;
 #include "snappingeffectscontroller.h"
 #include "snappingshaderspagecontroller.h"
 #include "snappingzoneselectorcontroller.h"
-#include "surfaceshaderpagecontroller.h"
+#include "decorationpagecontroller.h"
 #include "stagingservice.h"
 #include "tilingalgorithmcontroller.h"
 #include "snappingwindowappearancecontroller.h"
@@ -133,9 +133,10 @@ class SettingsController : public QObject
     Q_PROPERTY(TilingAlgorithmController* tilingAlgorithmPage READ tilingAlgorithmPage CONSTANT)
     Q_PROPERTY(GeneralPageController* generalPage READ generalPage CONSTANT)
     Q_PROPERTY(AnimationsPageController* animationsPage READ animationsPage CONSTANT)
-    // Surface (window-decoration) shader page — GLOBAL one-pack selection.
-    // QML reads `settingsController.surfaceShaderPage.<invokable>()`.
-    Q_PROPERTY(SurfaceShaderPageController* surfaceShaderPage READ surfaceShaderPage CONSTANT)
+    // Decoration drill-down — per-surface chains of decoration shader packs
+    // plus border/titlebar globals, resolved through a DecorationProfileTree.
+    // QML reads `settingsController.decorationPage.<invokable>()`.
+    Q_PROPERTY(DecorationPageController* decorationPage READ decorationPage CONSTANT)
     // Window Rules page — the unified rule surface. The controller owns one
     // WindowRuleModel and talks to the daemon's org.plasmazones.WindowRules
     // adaptor; QML reads `settingsController.windowRulesPage.model`.
@@ -380,9 +381,9 @@ public:
     {
         return m_animationsPage;
     }
-    SurfaceShaderPageController* surfaceShaderPage() const
+    DecorationPageController* decorationPage() const
     {
-        return m_surfaceShaderPage;
+        return m_decorationPage;
     }
     WindowRuleController* windowRulesPage() const
     {
@@ -657,13 +658,13 @@ private:
     PhosphorAnimationShaders::AnimationShaderRegistry* m_animationShaderRegistry = nullptr;
     AnimationsPageController* m_animationsPage = nullptr;
     /// Settings-side mirror of the daemon's/compositor's surface-shader
-    /// registry — drives the global Surface decoration-shader picker. Same
+    /// registry — drives the Decoration page's per-surface pack chains. Same
     /// parent / declaration-order rationale as `m_animationShaderRegistry`
     /// above: a QObject child of `this`, constructed before
-    /// `m_surfaceShaderPage` so the page controller's non-owned registry
+    /// `m_decorationPage` so the page controller's non-owned registry
     /// pointer outlives the page through child-destruction order.
     PhosphorSurfaceShaders::SurfaceShaderRegistry* m_surfaceShaderRegistry = nullptr;
-    SurfaceShaderPageController* m_surfaceShaderPage = nullptr;
+    DecorationPageController* m_decorationPage = nullptr;
     /// Window Rules page sub-controller. Parented to `this`; owns its
     /// WindowRuleModel internally. Constructed after m_animationsPage so its
     /// dirty-tracking connection is wired in the same ctor block.

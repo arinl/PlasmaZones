@@ -3,7 +3,6 @@
 
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
@@ -11,10 +10,10 @@ SettingsFlickable {
     id: root
 
     readonly property var settingsBridge: settingsController.snappingWindowAppearancePage
-    // Per-screen snapping gap/padding helper. Only the Gaps card below is
-    // per-screen; the colour / decoration / border cards are global. The Gaps
-    // card opts into the header scope chip, so the global cards above it carry
-    // no scope chrome and read as global.
+    // Per-screen snapping gap/padding helper for the Gaps card below. The
+    // border / colour / titlebar cards that used to live here moved to the
+    // Decoration page (per-surface chains + global defaults); only the
+    // per-screen Gaps card remains on this page.
 
     function snappingSettingValue(key, globalValue) {
         return snappingHelper.settingValue(key, globalValue);
@@ -45,146 +44,9 @@ SettingsFlickable {
         spacing: Kirigami.Units.largeSpacing
 
         // =================================================================
-        // Colors Card
-        // =================================================================
-        SettingsCard {
-            Layout.fillWidth: true
-            headerText: i18n("Colors")
-            collapsible: true
-
-            contentItem: ColumnLayout {
-                spacing: Kirigami.Units.smallSpacing
-
-                SettingsRow {
-                    title: i18n("Use system accent color")
-                    description: i18n("Derive border colors from your system color scheme")
-
-                    SettingsSwitch {
-                        id: useSystemColorsSwitch
-
-                        checked: appSettings.snappingUseSystemBorderColors
-                        accessibleName: i18n("Use system accent color")
-                        onToggled: function (newValue) {
-                            appSettings.snappingUseSystemBorderColors = newValue;
-                        }
-                    }
-                }
-
-                SettingsSeparator {
-                    visible: !useSystemColorsSwitch.checked
-                }
-
-                SettingsRow {
-                    visible: !useSystemColorsSwitch.checked
-                    title: i18n("Active border color")
-                    description: i18n("Border color for the focused snapped window")
-
-                    ColorSwatchRow {
-                        color: appSettings.snappingBorderColor
-                        onClicked: {
-                            activeBorderColorDialog.selectedColor = appSettings.snappingBorderColor;
-                            activeBorderColorDialog.open();
-                        }
-                    }
-                }
-
-                SettingsSeparator {
-                    visible: !useSystemColorsSwitch.checked
-                }
-
-                SettingsRow {
-                    visible: !useSystemColorsSwitch.checked
-                    title: i18n("Inactive border color")
-                    description: i18n("Border color for unfocused snapped windows")
-
-                    ColorSwatchRow {
-                        color: appSettings.snappingInactiveBorderColor
-                        onClicked: {
-                            inactiveBorderColorDialog.selectedColor = appSettings.snappingInactiveBorderColor;
-                            inactiveBorderColorDialog.open();
-                        }
-                    }
-                }
-            }
-        }
-
-        // =================================================================
-        // Decorations Card
-        // =================================================================
-        SettingsCard {
-            Layout.fillWidth: true
-            headerText: i18n("Decorations")
-            collapsible: true
-
-            contentItem: ColumnLayout {
-                spacing: Kirigami.Units.smallSpacing
-
-                SettingsRow {
-                    title: i18n("Hide title bars")
-                    description: i18n("Remove window title bars while snapped, restored when floating")
-
-                    SettingsSwitch {
-                        checked: appSettings.snappingHideTitleBars
-                        accessibleName: i18n("Hide title bars on snapped windows")
-                        onToggled: function (newValue) {
-                            appSettings.snappingHideTitleBars = newValue;
-                        }
-                    }
-                }
-            }
-        }
-
-        // =================================================================
-        // Borders Card
-        // =================================================================
-        SettingsCard {
-            Layout.fillWidth: true
-            headerText: i18n("Borders")
-            showToggle: true
-            toggleChecked: appSettings.snappingShowBorder
-            onToggleClicked: checked => {
-                return appSettings.snappingShowBorder = checked;
-            }
-            collapsible: true
-
-            contentItem: ColumnLayout {
-                spacing: Kirigami.Units.smallSpacing
-
-                SettingsRow {
-                    title: i18n("Border width")
-                    description: i18n("Thickness of colored borders around snapped windows")
-
-                    SettingsSpinBox {
-                        from: root.settingsBridge.snappingBorderWidthMin
-                        to: root.settingsBridge.snappingBorderWidthMax
-                        value: appSettings.snappingBorderWidth
-                        onValueModified: value => {
-                            return appSettings.snappingBorderWidth = value;
-                        }
-                    }
-                }
-
-                SettingsSeparator {}
-
-                SettingsRow {
-                    title: i18n("Corner radius")
-                    description: i18n("Roundness of border corners (0 for square)")
-
-                    SettingsSpinBox {
-                        from: root.settingsBridge.snappingBorderRadiusMin
-                        to: root.settingsBridge.snappingBorderRadiusMax
-                        value: appSettings.snappingBorderRadius
-                        onValueModified: value => {
-                            return appSettings.snappingBorderRadius = value;
-                        }
-                    }
-                }
-            }
-        }
-
-        // =================================================================
-        // Gaps (per-screen) — the card opts into the header scope chip; the
-        // global cards above carry no scope chrome.
+        // Gaps (per-screen) — the only card left on this page. Border, colour,
+        // and titlebar controls moved to the Decoration page. The card opts
+        // into the header scope chip.
         // =================================================================
         GapsSettingsCard {
             Layout.fillWidth: true
@@ -248,24 +110,5 @@ SettingsFlickable {
                 });
             }
         }
-    }
-
-    // =====================================================================
-    // Color Dialogs
-    // =====================================================================
-    ColorDialog {
-        id: activeBorderColorDialog
-
-        options: ColorDialog.ShowAlphaChannel
-        title: i18n("Choose Active Border Color")
-        onAccepted: appSettings.snappingBorderColor = selectedColor
-    }
-
-    ColorDialog {
-        id: inactiveBorderColorDialog
-
-        options: ColorDialog.ShowAlphaChannel
-        title: i18n("Choose Inactive Border Color")
-        onAccepted: appSettings.snappingInactiveBorderColor = selectedColor
     }
 }

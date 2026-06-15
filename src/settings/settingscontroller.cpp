@@ -478,15 +478,17 @@ SettingsController::SettingsController(QObject* parent)
         m_surfaceShaderRegistry->addSearchPaths(surfaceDirs);
     }
 
-    // Surface (window-decoration) shader page sub-controller. GLOBAL scope:
-    // one pack for every decorated window. The selection persists via the
-    // Settings surfaceShaderEffectId / surfaceShaderParameters Q_PROPERTYs,
-    // whose NOTIFY signals the meta-object loop above already routes into
-    // onSettingsPropertyChanged for dirty tracking — so this controller
-    // needs no per-page staging (isDirty/apply/discard are no-ops). It is
-    // registered with the framework as a regPage (NOT a headless domain)
-    // in buildApplicationController.
-    m_surfaceShaderPage = new SurfaceShaderPageController(m_surfaceShaderRegistry, &m_settings, this);
+    // Decoration drill-down sub-controller. PER-SURFACE scope: edits a
+    // DecorationProfileTree (chains of decoration packs + border/titlebar
+    // appearance) with a baseline global default + walk-up inheritance. The
+    // tree persists via the Settings decorationProfileTreeJson Q_PROPERTY,
+    // whose NOTIFY (decorationProfileTreeChanged) the meta-object loop above
+    // already routes into onSettingsPropertyChanged for dirty tracking — so
+    // this controller needs no per-page staging (isDirty/apply/discard are
+    // no-ops). It is registered with the framework as a headless domain (the
+    // drill-down nav nodes are virtual PageAdapters) in
+    // buildApplicationController.
+    m_decorationPage = new DecorationPageController(m_surfaceShaderRegistry, &m_settings, this);
 
     // Window Rules page sub-controller — the unified rule surface. It owns
     // its own WindowRuleModel and talks to the daemon's

@@ -101,11 +101,20 @@ set(plasmazones_settings_SRCS
     snappingshaderspagecontroller.cpp
     snappingzoneselectorcontroller.h
     snappingzoneselectorcontroller.cpp
-    # Surface (window-decoration) shader page — GLOBAL one-pack selection.
-    # Parallel to AnimationsPageController but with no per-event tree and no
-    # staging; selection writes straight to Settings.
-    surfaceshaderpagecontroller.h
-    surfaceshaderpagecontroller.cpp
+    # Decoration drill-down page — PER-SURFACE chains of decoration shader
+    # packs + border/titlebar globals, resolved through a
+    # DecorationProfileTree (baseline + walk-up inheritance). Parallel to
+    # AnimationsPageController's tree model but with no per-event staging;
+    # mutations write straight to the Settings decorationProfileTree.
+    decorationpagecontroller.h
+    decorationpagecontroller.cpp
+    # Surface-taxonomy helpers (surfaceLeafPaths / surfaceLabel /
+    # parentChain) split into a sibling TU to keep the main controller TU
+    # under the 800-line cap. Same class, separate TU, no API change.
+    decorationpagecontroller_paths.cpp
+    # Internal header carrying the inline effect/parameter/profile→QVariantMap
+    # helpers shared between the two DecorationPageController TUs.
+    decoration_controller_detail.h
     tilingalgorithmcontroller.h
     tilingalgorithmcontroller.cpp
     tilingappearancecontroller.h
@@ -317,9 +326,16 @@ qt_add_qml_module(plasmazones-settings
         qml/AnimationsPresetsPage.qml
         qml/AnimationsShadersPage.qml
         qml/SnappingShadersPage.qml
-        # Surface (window-decoration) shader page — global pack picker +
-        # ShaderParameterEditor + preview.
-        qml/SurfaceShaderPage.qml
+        # Decoration drill-down — General (global baseline defaults) +
+        # per-surface override cards (Windows / OSDs / Popups), each driving
+        # a ChainEditor (ordered decoration-pack list with per-pack params)
+        # and border/titlebar field overrides via DecorationPageController.
+        qml/DecorationGeneralPage.qml
+        qml/DecorationWindowsPage.qml
+        qml/DecorationOsdsPage.qml
+        qml/DecorationPopupsPage.qml
+        qml/DecorationSurfaceCard.qml
+        qml/ChainEditor.qml
         # Pack-agnostic shader-browser components — shared by the
         # animation-shader and snapping-overlay-shader pages. Both pages
         # are thin wrappers that pass the right controller bridge.

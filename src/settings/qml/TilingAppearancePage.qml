@@ -3,7 +3,6 @@
 
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Dialogs
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 
@@ -12,10 +11,10 @@ SettingsFlickable {
 
     readonly property var settingsBridge: settingsController.tilingAppearancePage
     readonly property int gapMax: root.settingsBridge.autotileGapMax
-    // Per-screen override helper. Only the Gaps card below is per-screen; the
-    // colour / decoration / border cards are global. The Gaps card opts into
-    // the header scope chip, so the global cards above carry no scope chrome
-    // and read as global.
+    // Per-screen override helper for the Gaps card below. The border / colour /
+    // titlebar cards that used to live here moved to the Decoration page
+    // (per-surface chains + global defaults); only the per-screen Gaps card
+    // remains on this page.
     function settingValue(key, globalValue) {
         return psHelper.settingValue(key, globalValue);
     }
@@ -45,147 +44,10 @@ SettingsFlickable {
         spacing: Kirigami.Units.largeSpacing
 
         // =================================================================
-        // Colors Card
-        // =================================================================
-        SettingsCard {
-            Layout.fillWidth: true
-            headerText: i18n("Colors")
-            collapsible: true
-
-            contentItem: ColumnLayout {
-                spacing: Kirigami.Units.smallSpacing
-
-                SettingsRow {
-                    title: i18n("Use system accent color")
-                    description: i18n("Derive border colors from your system color scheme")
-
-                    SettingsSwitch {
-                        id: useSystemColorsSwitch
-
-                        checked: appSettings.autotileUseSystemBorderColors
-                        accessibleName: i18n("Use system accent color")
-                        onToggled: function (newValue) {
-                            appSettings.autotileUseSystemBorderColors = newValue;
-                        }
-                    }
-                }
-
-                SettingsSeparator {
-                    visible: !useSystemColorsSwitch.checked
-                }
-
-                SettingsRow {
-                    visible: !useSystemColorsSwitch.checked
-                    title: i18n("Active border color")
-                    description: i18n("Border color for the focused window")
-
-                    ColorSwatchRow {
-                        color: appSettings.autotileBorderColor
-                        onClicked: {
-                            activeBorderColorDialog.selectedColor = appSettings.autotileBorderColor;
-                            activeBorderColorDialog.open();
-                        }
-                    }
-                }
-
-                SettingsSeparator {
-                    visible: !useSystemColorsSwitch.checked
-                }
-
-                SettingsRow {
-                    visible: !useSystemColorsSwitch.checked
-                    title: i18n("Inactive border color")
-                    description: i18n("Border color for unfocused windows")
-
-                    ColorSwatchRow {
-                        color: appSettings.autotileInactiveBorderColor
-                        onClicked: {
-                            inactiveBorderColorDialog.selectedColor = appSettings.autotileInactiveBorderColor;
-                            inactiveBorderColorDialog.open();
-                        }
-                    }
-                }
-            }
-        }
-
-        // =================================================================
-        // Decorations Card
-        // =================================================================
-        SettingsCard {
-            Layout.fillWidth: true
-            headerText: i18n("Decorations")
-            collapsible: true
-
-            contentItem: ColumnLayout {
-                spacing: Kirigami.Units.smallSpacing
-
-                SettingsRow {
-                    title: i18n("Hide title bars")
-                    description: i18n("Remove window title bars while autotiled, restored when floating")
-
-                    SettingsSwitch {
-                        checked: appSettings.autotileHideTitleBars
-                        accessibleName: i18n("Hide title bars on tiled windows")
-                        onToggled: function (newValue) {
-                            appSettings.autotileHideTitleBars = newValue;
-                        }
-                    }
-                }
-            }
-        }
-
-        // =================================================================
-        // Borders Card
-        // =================================================================
-        SettingsCard {
-            Layout.fillWidth: true
-            headerText: i18n("Borders")
-            showToggle: true
-            toggleChecked: appSettings.autotileShowBorder
-            onToggleClicked: checked => {
-                return appSettings.autotileShowBorder = checked;
-            }
-            collapsible: true
-
-            contentItem: ColumnLayout {
-                spacing: Kirigami.Units.smallSpacing
-
-                SettingsRow {
-                    title: i18n("Border width")
-                    description: i18n("Thickness of colored borders around tiled windows")
-
-                    SettingsSpinBox {
-                        from: root.settingsBridge.autotileBorderWidthMin
-                        to: root.settingsBridge.autotileBorderWidthMax
-                        value: appSettings.autotileBorderWidth
-                        onValueModified: value => {
-                            return appSettings.autotileBorderWidth = value;
-                        }
-                    }
-                }
-
-                SettingsSeparator {}
-
-                SettingsRow {
-                    title: i18n("Corner radius")
-                    description: i18n("Roundness of border corners (0 for square)")
-
-                    SettingsSpinBox {
-                        from: root.settingsBridge.autotileBorderRadiusMin
-                        to: root.settingsBridge.autotileBorderRadiusMax
-                        value: appSettings.autotileBorderRadius
-                        onValueModified: value => {
-                            return appSettings.autotileBorderRadius = value;
-                        }
-                    }
-                }
-            }
-        }
-
-        // =================================================================
-        // Gaps (per-screen) — the card opts into the header scope chip, so it
-        // reads as a normal global card until you pick a monitor. The global
-        // cards above carry no scope chrome, keeping their scope unambiguous.
+        // Gaps (per-screen) — the only card left on this page. Border, colour,
+        // and titlebar controls moved to the Decoration page. The card opts
+        // into the header scope chip, reading as a normal global card until
+        // you pick a monitor.
         // =================================================================
         GapsSettingsCard {
             Layout.fillWidth: true
@@ -248,24 +110,5 @@ SettingsFlickable {
                 });
             }
         }
-    }
-
-    // =====================================================================
-    // Color Dialogs
-    // =====================================================================
-    ColorDialog {
-        id: activeBorderColorDialog
-
-        options: ColorDialog.ShowAlphaChannel
-        title: i18n("Choose Active Border Color")
-        onAccepted: appSettings.autotileBorderColor = selectedColor
-    }
-
-    ColorDialog {
-        id: inactiveBorderColorDialog
-
-        options: ColorDialog.ShowAlphaChannel
-        title: i18n("Choose Inactive Border Color")
-        onAccepted: appSettings.autotileInactiveBorderColor = selectedColor
     }
 }

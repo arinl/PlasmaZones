@@ -299,9 +299,9 @@ void OverlayService::pushLayoutOsdContent(QObject* osdSlot, const LayoutOsdConte
     // Stage d: resolve + push the OSD's surface-shader decoration (rounded
     // corners + border) onto the slot. Done here so every layout-OSD show path
     // (showLayoutOsdImpl / showLayoutOsd(string…) / showDisabledOsd) decorates
-    // consistently; showNavigationOsd calls applyOsdDecoration directly since it
+    // consistently; showNavigationOsd calls applyDecoration directly since it
     // does not route through pushLayoutOsdContent.
-    applyOsdDecoration(osdSlot);
+    applyDecoration(osdSlot, QStringLiteral("osd"));
 }
 
 void OverlayService::setSurfaceShaderRegistry(PhosphorSurfaceShaders::SurfaceShaderRegistry* registry)
@@ -309,20 +309,20 @@ void OverlayService::setSurfaceShaderRegistry(PhosphorSurfaceShaders::SurfaceSha
     m_surfaceShaderRegistry = registry;
 }
 
-void OverlayService::applyOsdDecoration(QObject* osdSlot)
+void OverlayService::applyDecoration(QObject* slot, const QString& surfacePath)
 {
-    if (!osdSlot) {
+    if (!slot) {
         return;
     }
 
     // Helper to leave the slot undecorated: clear the source so the QML
-    // OsdSurfaceDecoration stays inert and the card draws its native chrome.
+    // SurfaceDecoration stays inert and the card draws its native chrome.
     // Mirror applyShaderInfoToWindow's clear-first discipline (an empty URL
     // tears down any prior decoration before new aux props would matter).
-    const auto clearDecoration = [osdSlot]() {
-        writeQmlProperty(osdSlot, QStringLiteral("decorationShaderSource"), QUrl());
-        writeQmlProperty(osdSlot, QStringLiteral("decorationParamPreamble"), QString());
-        writeQmlProperty(osdSlot, QStringLiteral("decorationShaderParams"), QVariant::fromValue(QVariantMap()));
+    const auto clearDecoration = [slot]() {
+        writeQmlProperty(slot, QStringLiteral("decorationShaderSource"), QUrl());
+        writeQmlProperty(slot, QStringLiteral("decorationParamPreamble"), QString());
+        writeQmlProperty(slot, QStringLiteral("decorationShaderParams"), QVariant::fromValue(QVariantMap()));
     };
 
     if (!m_settings || !m_surfaceShaderRegistry) {
@@ -330,32 +330,32 @@ void OverlayService::applyOsdDecoration(QObject* osdSlot)
         return;
     }
 
-    // Resolve the "osd" surface path through the decoration tree. resolve()
-    // walks baseline → category → leaf and returns a DecorationProfile carrying
-    // an effective CHAIN (ordered pack ids) plus a per-pack parameters map.
+    // Resolve @p surfacePath through the decoration tree. resolve() walks
+    // baseline → category → leaf and returns a DecorationProfile carrying an
+    // effective CHAIN (ordered pack ids) plus a per-pack parameters map.
     const PhosphorSurfaceShaders::DecorationProfileTree tree = m_settings->decorationProfileTree();
-    const PhosphorSurfaceShaders::DecorationProfile profile = tree.resolve(QStringLiteral("osd"));
+    const PhosphorSurfaceShaders::DecorationProfile profile = tree.resolve(surfacePath);
     const QStringList chain = profile.effectiveChain();
     if (chain.isEmpty()) {
-        // No decoration packs configured for the OSD — render it plainly.
+        // No decoration packs configured for this surface — render it plainly.
         clearDecoration();
         return;
     }
 
-    // OSD is single-pass for now: take the first pack id in the resolved chain.
-    // (Multi-pack composition over the OSD is out of scope for this stage.)
+    // Single-pass for now: take the first pack id in the resolved chain.
+    // (Multi-pack composition is out of scope for this stage.)
     const QString packId = chain.constFirst();
     if (!m_surfaceShaderRegistry->hasEffect(packId)) {
-        qCWarning(lcOverlay) << "OSD decoration: resolved pack id" << packId
-                             << "is not present in the surface-shader registry — rendering OSD without decoration";
+        qCWarning(lcOverlay) << "Surface decoration (" << surfacePath << "): resolved pack id" << packId
+                             << "is not present in the surface-shader registry — rendering without decoration";
         clearDecoration();
         return;
     }
 
     const PhosphorSurfaceShaders::SurfaceShaderEffect effect = m_surfaceShaderRegistry->effect(packId);
     if (!effect.isValid() || effect.fragmentShaderPath.isEmpty()) {
-        qCWarning(lcOverlay) << "OSD decoration: pack" << packId
-                             << "has no valid fragment shader — rendering OSD without decoration";
+        qCWarning(lcOverlay) << "Surface decoration (" << surfacePath << "): pack" << packId
+                             << "has no valid fragment shader — rendering without decoration";
         clearDecoration();
         return;
     }
@@ -374,10 +374,10 @@ void OverlayService::applyOsdDecoration(QObject* osdSlot)
     // aux props (preamble + params), then write the source LAST so the QML
     // SurfaceShaderItem's load triggers with the preamble/params already in
     // place on its first bake.
-    writeQmlProperty(osdSlot, QStringLiteral("decorationShaderSource"), QUrl());
-    writeQmlProperty(osdSlot, QStringLiteral("decorationParamPreamble"), preamble);
-    writeQmlProperty(osdSlot, QStringLiteral("decorationShaderParams"), QVariant::fromValue(translatedParams));
-    writeQmlProperty(osdSlot, QStringLiteral("decorationShaderSource"), QUrl::fromLocalFile(effect.fragmentShaderPath));
+    writeQmlProperty(slot, QStringLiteral("decorationShaderSource"), QUrl());
+    writeQmlProperty(slot, QStringLiteral("decorationParamPreamble"), preamble);
+    writeQmlProperty(slot, QStringLiteral("decorationShaderParams"), QVariant::fromValue(translatedParams));
+    writeQmlProperty(slot, QStringLiteral("decorationShaderSource"), QUrl::fromLocalFile(effect.fragmentShaderPath));
 }
 
 void OverlayService::showDisabledOsd(const QString& reason, const QString& screenId)
@@ -655,7 +655,7 @@ void OverlayService::showNavigationOsd(bool success, const QString& action, cons
     // Stage d: resolve + push the OSD surface decoration. Navigation OSDs do
     // not route through pushLayoutOsdContent, so apply it explicitly here (same
     // decoration the layout-OSD paths get via pushLayoutOsdContent).
-    applyOsdDecoration(osdSlot);
+    applyDecoration(osdSlot, QStringLiteral("osd"));
 
     // Write mode AFTER data properties so the Loader-instantiated
     // NavigationOsdContent picks up correct values on first binding pass.

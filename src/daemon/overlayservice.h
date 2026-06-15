@@ -843,13 +843,14 @@ private:
     };
     void pushLayoutOsdContent(QObject* osdSlot, const LayoutOsdContentParams& params);
 
-    /// Resolve the OSD's surface-decoration pack from the settings'
-    /// DecorationProfileTree ("osd" path) and push it onto the OSD slot's
-    /// decoration properties (Stage d). Shared by every OSD show path so all
-    /// modes (layout / locked / disabled / navigation) pick up the decoration.
-    /// Clears the slot's decorationShaderSource when no pack resolves so a
-    /// stale decoration never renders.
-    void applyOsdDecoration(QObject* osdSlot);
+    /// Resolve a surface-decoration pack from the settings' DecorationProfileTree
+    /// (@p surfacePath, e.g. "osd" / "popup.snapAssist" / "popup.zoneSelector" /
+    /// "popup.layoutPicker") and push it onto @p slot's decoration properties
+    /// (Stage d). Shared by every OSD show path (all modes: layout / locked /
+    /// disabled / navigation) and the three transient popup show paths. Clears
+    /// the slot's decorationShaderSource when no pack resolves so a stale
+    /// decoration never renders.
+    void applyDecoration(QObject* slot, const QString& surfacePath);
 
     void destroyIfTypeMismatch(const QString& screenId);
     void createShaderPreviewWindow(QScreen* screen, const QString& screenId = QString());

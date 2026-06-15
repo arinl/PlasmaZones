@@ -6,27 +6,38 @@ import QtQuick
 import QtQuick.Window
 
 /**
- * OSD surface-shader decoration host (Stage d).
+ * Surface-shader decoration host (Stage d).
  *
- * Renders the daemon's OSD card through a SURFACE shader pack (rounded corners +
- * border today) resolved by C++ from `DecorationProfileTree.resolve("osd")`.
+ * Renders a daemon overlay card (OSD or a transient popup — snap-assist,
+ * zone-selector, layout-picker) through a SURFACE shader pack (rounded corners +
+ * border today) resolved by C++ from `DecorationProfileTree.resolve(<path>)`.
  * The pack SAMPLES the card content as `uTexture0` and REPLACES it with a
  * clipped-and-bordered version, so the decoration must (a) capture the live card
  * into a texture, (b) suppress the card's own square-cornered direct draw, and
  * (c) re-render that texture through the shader over the same on-screen rect.
  *
- * ## Capture target — the PopupFrame `shaderAnchor`
+ * ## Capture target — the `shaderAnchor`
  *
- * Every OSD card body wraps its visible frame in a `PopupFrame`, whose
- * `captureItem` is tagged `objectName: "shaderAnchor"` (the same item
- * `SurfaceAnimator` captures for show/hide transitions). It is larger than the
- * visible frame by a glow ring and publishes `shaderContentRect` — the visible
- * frame's rect inside the (glow-padded) capture item, in anchor-local logical
- * px. We capture the WHOLE anchor as `uTexture0` and feed `shaderContentRect`
- * as the frame geometry, so the surface contract rounds to the visible frame
- * corners (not the glow-padded bounds). This is the faithful mapping for
- * PopupFrame's padded capture; surface_uniforms.glsl's
- * uSurfaceFrameTopLeft/uSurfaceFrameSize exist precisely for this.
+ * Most card bodies wrap their visible frame in a `PopupFrame`, whose
+ * `captureItem` is tagged BOTH `objectName: "shaderAnchor"` AND
+ * `property bool shaderAnchor: true` (the same item `SurfaceAnimator` captures
+ * for show/hide transitions). It is larger than the visible frame by a glow ring
+ * and publishes `shaderContentRect` — the visible frame's rect inside the
+ * (glow-padded) capture item, in anchor-local logical px. We capture the WHOLE
+ * anchor as `uTexture0` and feed `shaderContentRect` as the frame geometry, so
+ * the surface contract rounds to the visible frame corners (not the glow-padded
+ * bounds). This is the faithful mapping for PopupFrame's padded capture;
+ * surface_uniforms.glsl's uSurfaceFrameTopLeft/uSurfaceFrameSize exist precisely
+ * for this.
+ *
+ * Some content (snap-assist) has no PopupFrame: its CONTENT ROOT itself carries
+ * only `property bool shaderAnchor: true` (no objectName, no shaderContentRect).
+ * The anchor finder below matches EITHER a truthy `shaderAnchor` property OR
+ * objectName === "shaderAnchor" (mirroring SurfaceAnimator's
+ * findShaderAnchorRecursive), and checks the content root itself — not just its
+ * descendants — so snap-assist's root-as-anchor resolves. The
+ * `shaderContentRect !== undefined` guard below then falls back to full-anchor
+ * geometry when no PopupFrame publishes that rect.
  *
  * ## Hide-source idiom — mirrors SurfaceAnimator verbatim
  *
@@ -43,20 +54,22 @@ import QtQuick.Window
  *
  * ## Lifecycle
  *
- * The host (PassiveOverlayShell.osdSlot) passes the loaded OSD content root as
- * `contentItem` and the C++-resolved decoration props. When
- * `decorationShaderSource` is empty (no "osd" pack resolves) the component is
- * inert: the capture/shader items don't activate and the card draws normally
- * with its native square-cornered chrome.
+ * The host slot (PassiveOverlayShell.osdSlot / snapAssistSlot / layoutPickerSlot
+ * / zoneSelectorSlot) passes the loaded content root as `contentItem` and the
+ * C++-resolved decoration props. When `decorationShaderSource` is empty (no pack
+ * resolves for this surface path) the component is inert: the capture/shader
+ * items don't activate and the card draws normally with its native
+ * square-cornered chrome.
  */
 Item {
     id: root
 
-    /// Loaded OSD content root (osdLoader.item). Its nested PopupFrame exposes
+    /// Loaded content root (the slot Loader's item). Its nested PopupFrame
+    /// (OSD / selector / picker) — or the root itself (snap-assist) — exposes
     /// the `shaderAnchor` capture item we decorate.
     property Item contentItem: null
 
-    /// C++-resolved surface pack, written by OverlayService::applyOsdDecoration:
+    /// C++-resolved surface pack, written by OverlayService::applyDecoration:
     ///   • decorationShaderSource  — file:// url of the pack's effect.frag (""
     ///                               = no decoration; component stays inert).
     ///   • decorationParamPreamble — generated `#define p_<id> …` preamble.
@@ -72,31 +85,34 @@ Item {
     readonly property real surfaceScale: Screen.devicePixelRatio
 
     /// Whether any decoration is active. Gates the capture + shader items so an
-    /// undecorated OSD pays nothing and draws its native card.
+    /// undecorated card pays nothing and draws its native card.
     readonly property bool decorationActive: decorationShaderSource.toString() !== "" && shaderAnchorItem !== null
 
-    /// The PopupFrame capture item (objectName "shaderAnchor") inside the loaded
-    /// content. Re-resolved whenever the content swaps (Loader re-instantiation
-    /// on each show produces a fresh anchor — matches the per-show shaderAnchor
-    /// the dismiss path forces via the mode="" unload).
+    /// The shaderAnchor capture item inside (or equal to) the loaded content.
+    /// Re-resolved whenever the content swaps (Loader re-instantiation on each
+    /// show produces a fresh anchor — matches the per-show shaderAnchor the
+    /// dismiss path forces via the mode="" / loaded=false unload).
     property Item shaderAnchorItem: null
 
     function _resolveAnchor() {
-        shaderAnchorItem = contentItem ? _findByObjectName(contentItem, "shaderAnchor") : null;
+        shaderAnchorItem = contentItem ? _findShaderAnchor(contentItem) : null;
     }
 
-    // Depth-first search for the shaderAnchor by objectName. Mirrors the C++
-    // findQmlItemByName the selector/snap-assist paths use to locate the same
-    // item; QML has no built-in recursive findChild for visual items.
-    function _findByObjectName(node, name) {
+    // Depth-first search for the shaderAnchor. Mirrors SurfaceAnimator's
+    // findShaderAnchorRecursive (libs/phosphor-animation): matches EITHER a
+    // truthy `shaderAnchor` property OR objectName === "shaderAnchor", and
+    // checks the node ITSELF before its descendants — snap-assist's anchor IS
+    // the content root passed in as contentItem (only a `shaderAnchor: true`
+    // property, no objectName, no nested PopupFrame). QML has no built-in
+    // recursive findChild for visual items.
+    function _findShaderAnchor(node) {
         if (!node)
             return null;
+        if (node.shaderAnchor === true || node.objectName === "shaderAnchor")
+            return node;
         var kids = node.children;
         for (var i = 0; i < kids.length; i++) {
-            var child = kids[i];
-            if (child.objectName === name)
-                return child;
-            var found = _findByObjectName(child, name);
+            var found = _findShaderAnchor(kids[i]);
             if (found)
                 return found;
         }
@@ -143,7 +159,7 @@ Item {
 
     // ── Surface shader pass ──────────────────────────────────────────────────
     // Sibling of the captured card (parented to this host, which is a sibling of
-    // osdLoader inside osdSlot — never an ancestor of the anchor, so no feedback
+    // the slot's content Loader — never an ancestor of the anchor, so no feedback
     // loop). Positioned over the anchor's on-screen rect, mapped into this
     // host's coordinate space.
     SurfaceShaderItem {
@@ -170,8 +186,9 @@ Item {
         // if the capture had no padding; PopupFrame pads, so the real frame
         // rect is fed through.
         surfaceScale: root.surfaceScale
-        // OSD is always shown for the active context — the focused colour params
-        // are the intended look. A literal true is correct here.
+        // These overlays (OSD + transient popups) are always shown for the
+        // active context — the focused colour params are the intended look. A
+        // literal true is correct here.
         surfaceFocused: true
         surfaceSize: root.shaderAnchorItem ? Qt.size(root.shaderAnchorItem.width * root.surfaceScale, root.shaderAnchorItem.height * root.surfaceScale) : Qt.size(0, 0)
         surfaceFrameTopLeft: (root.shaderAnchorItem && root.shaderAnchorItem.shaderContentRect !== undefined) ? Qt.point(root.shaderAnchorItem.shaderContentRect.x * root.surfaceScale, root.shaderAnchorItem.shaderContentRect.y * root.surfaceScale) : Qt.point(0, 0)

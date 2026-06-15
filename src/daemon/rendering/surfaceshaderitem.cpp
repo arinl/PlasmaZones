@@ -167,6 +167,20 @@ QSGNode* SurfaceShaderItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDat
     // texture, zone counts, or extension.
     syncBasePropertiesToNode(node);
 
+    // ── Sync source texture provider (slot 0 / binding 7, uTexture0) ──
+    // The base ShaderEffect binds this in ITS updatePaintNode, NOT in
+    // syncBasePropertiesToNode — so a subclass that fully reimplements
+    // updatePaintNode (like this one) must replicate it or sourceItem()
+    // never reaches the node and uTexture0 stays unbound (surfaceTexel then
+    // samples transparent black and the decoration shows no content). Pushed
+    // every paint so a late setSourceItem picks up and a torn-down source
+    // (QPointer auto-nulls) clears the binding. Mirrors shadereffect.cpp.
+    if (QQuickItem* src = sourceItem(); src && src->isTextureProvider()) {
+        node->setSourceTextureProvider(src->textureProvider());
+    } else {
+        node->setSourceTextureProvider(nullptr);
+    }
+
     // ── Push surface-only state ──────────────────────────────────────
     // These land in the surface UBO's scene region (a SurfaceUniformProfile
     // reads them; a BaseUniformProfile ignores them). The geometry is what a

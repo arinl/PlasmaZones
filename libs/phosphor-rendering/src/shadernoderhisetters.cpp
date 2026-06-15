@@ -147,6 +147,71 @@ void ShaderNodeRhi::setCustomColor(int index, const QColor& color)
 }
 
 // ============================================================================
+// Surface-only state
+// ============================================================================
+//
+// Each of these lands in the surface UBO's scene region (a SurfaceUniformProfile
+// reads them from UboFrameState; a BaseUniformProfile ignores them), so they
+// mark m_sceneDataDirty just like the custom params/colours above.
+
+void ShaderNodeRhi::setSurfaceOpacity(float opacity)
+{
+    if (m_surfaceOpacity != opacity) {
+        m_surfaceOpacity = opacity;
+        m_uniformsDirty = true;
+        m_sceneDataDirty = true;
+    }
+}
+
+void ShaderNodeRhi::setSurfaceScale(float scale)
+{
+    if (m_surfaceScale != scale) {
+        m_surfaceScale = scale;
+        m_uniformsDirty = true;
+        m_sceneDataDirty = true;
+    }
+}
+
+void ShaderNodeRhi::setSurfaceFocused(bool focused)
+{
+    if (m_surfaceFocused != focused) {
+        m_surfaceFocused = focused;
+        m_uniformsDirty = true;
+        m_sceneDataDirty = true;
+    }
+}
+
+void ShaderNodeRhi::setSurfaceSize(float width, float height)
+{
+    if (m_surfaceSize[0] != width || m_surfaceSize[1] != height) {
+        m_surfaceSize[0] = width;
+        m_surfaceSize[1] = height;
+        m_uniformsDirty = true;
+        m_sceneDataDirty = true;
+    }
+}
+
+void ShaderNodeRhi::setSurfaceFrameTopLeft(float x, float y)
+{
+    if (m_surfaceFrameTopLeft[0] != x || m_surfaceFrameTopLeft[1] != y) {
+        m_surfaceFrameTopLeft[0] = x;
+        m_surfaceFrameTopLeft[1] = y;
+        m_uniformsDirty = true;
+        m_sceneDataDirty = true;
+    }
+}
+
+void ShaderNodeRhi::setSurfaceFrameSize(float width, float height)
+{
+    if (m_surfaceFrameSize[0] != width || m_surfaceFrameSize[1] != height) {
+        m_surfaceFrameSize[0] = width;
+        m_surfaceFrameSize[1] = height;
+        m_uniformsDirty = true;
+        m_sceneDataDirty = true;
+    }
+}
+
+// ============================================================================
 // App Fields
 // ============================================================================
 

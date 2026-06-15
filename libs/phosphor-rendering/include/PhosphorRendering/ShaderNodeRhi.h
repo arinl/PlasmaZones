@@ -169,6 +169,25 @@ public:
     void setCustomParams(int index, const QVector4D& params);
     void setCustomColor(int index, const QColor& color);
 
+    // ── Surface-only state ─────────────────────────────────────────────
+    /**
+     * @brief Per-surface inputs consumed by a SurfaceUniformProfile.
+     *
+     * These feed the surface-only fields of UboFrameState that a surface UBO
+     * profile reads (opacity, logical→device scale, focus, surface/frame
+     * geometry in device px). A BaseUniformProfile ignores them, so the
+     * overlay/animation path is unaffected — the members default to the same
+     * values as UboFrameState. A border or rounded-corner pack needs the real
+     * surface/frame geometry to know where its edges are, so the host
+     * (SurfaceShaderItem) must push these each frame from updatePaintNode.
+     */
+    void setSurfaceOpacity(float opacity);
+    void setSurfaceScale(float scale);
+    void setSurfaceFocused(bool focused);
+    void setSurfaceSize(float width, float height);
+    void setSurfaceFrameTopLeft(float x, float y);
+    void setSurfaceFrameSize(float width, float height);
+
     // ── App Fields (consumer escape hatch in BaseUniforms) ─────────────
     /**
      * @brief Write the consumer's two int slots inside BaseUniforms (offsets 88, 92).
@@ -500,6 +519,16 @@ private:
     std::atomic<float> m_cachedWidth{0.0f};
     std::atomic<float> m_cachedHeight{0.0f};
     QPointF m_mousePosition;
+
+    // ── Surface-only state (consumed by a SurfaceUniformProfile; ignored by
+    //    the BaseUniformProfile). Defaults mirror UboFrameState so the overlay
+    //    path is byte-identical whether or not these are ever touched. ──
+    float m_surfaceOpacity = 1.0f;
+    float m_surfaceScale = 1.0f;
+    bool m_surfaceFocused = false;
+    float m_surfaceSize[2] = {0.0f, 0.0f};
+    float m_surfaceFrameTopLeft[2] = {0.0f, 0.0f};
+    float m_surfaceFrameSize[2] = {0.0f, 0.0f};
 
     // ── Custom Parameters (indexed) ────────────────────────────────────
     std::array<QVector4D, kMaxCustomParams> m_customParams;

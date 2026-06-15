@@ -72,14 +72,10 @@ PhosphorRendering::ShaderNodeRhi* SurfaceShaderItem::createShaderNode()
 // ============================================================================
 //
 // These feed the surface-only fields of PhosphorShaders::UboFrameState that
-// SurfaceUniformProfile::fill() reads. The per-frame push from item → node is
-// the one place the shared render engine does not yet generalise to surfaces:
-// ShaderNodeRhi::syncBaseUniforms() snapshots only the overlay/animation node
-// members and leaves the surface UboFrameState fields at their defaults (scale
-// 1.0, unfocused, zero geometry), so the values stored here do not reach the
-// UBO until the node grows surface-field setters. Storing + emitting on change
-// keeps the QML host's binding surface correct and lets that wiring land in the
-// on-screen host stage without re-shaping this item.
+// SurfaceUniformProfile::fill() reads. updatePaintNode() pushes them into the
+// render node each frame via ShaderNodeRhi's surface-state setters, so a border
+// or rounded-corner pack sees the real surface/frame geometry, scale and focus.
+// Storing + emitting on change keeps the QML host's binding surface reactive.
 
 void SurfaceShaderItem::setSurfaceScale(qreal scale)
 {
@@ -168,9 +164,22 @@ QSGNode* SurfaceShaderItem::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeDat
     // ── Sync base properties (time, params, colors, audio, multipass, depth) ──
     // syncBasePropertiesToNode pushes user textures (slots 0..3) and the
     // installed uniform extension (none here). Surface packs have no labels
-    // texture, zone counts, or extension, so there is nothing surface-specific
-    // to sync.
+    // texture, zone counts, or extension.
     syncBasePropertiesToNode(node);
+
+    // ── Push surface-only state ──────────────────────────────────────
+    // These land in the surface UBO's scene region (a SurfaceUniformProfile
+    // reads them; a BaseUniformProfile ignores them). The geometry is what a
+    // border/rounded-corner pack uses to place its edges. Opacity comes from
+    // the item's own opacity so a host can fade the decoration.
+    node->setSurfaceOpacity(static_cast<float>(opacity()));
+    node->setSurfaceScale(static_cast<float>(m_surfaceScale));
+    node->setSurfaceFocused(m_surfaceFocused);
+    node->setSurfaceSize(static_cast<float>(m_surfaceSize.width()), static_cast<float>(m_surfaceSize.height()));
+    node->setSurfaceFrameTopLeft(static_cast<float>(m_surfaceFrameTopLeft.x()),
+                                 static_cast<float>(m_surfaceFrameTopLeft.y()));
+    node->setSurfaceFrameSize(static_cast<float>(m_surfaceFrameSize.width()),
+                              static_cast<float>(m_surfaceFrameSize.height()));
 
     // ── Sync shader source ───────────────────────────────────────────
     // Reload only on an actual dirty flag (runtime setShaderSource /

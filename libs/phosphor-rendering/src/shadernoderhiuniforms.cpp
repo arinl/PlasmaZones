@@ -43,6 +43,18 @@ void ShaderNodeRhi::syncBaseUniforms(QRhi* rhi)
     state.sceneDataDirty = m_sceneDataDirty;
     state.yUpInNDC = rhi->isYUpInNDC();
 
+    // Surface-only fields — read by a SurfaceUniformProfile, ignored by the
+    // BaseUniformProfile (so the overlay/animation UBO bytes are unchanged).
+    state.qtOpacity = m_surfaceOpacity;
+    state.surfaceScale = m_surfaceScale;
+    state.surfaceFocused = m_surfaceFocused ? 1.0f : 0.0f;
+    state.surfaceSize[0] = m_surfaceSize[0];
+    state.surfaceSize[1] = m_surfaceSize[1];
+    state.surfaceFrameTopLeft[0] = m_surfaceFrameTopLeft[0];
+    state.surfaceFrameTopLeft[1] = m_surfaceFrameTopLeft[1];
+    state.surfaceFrameSize[0] = m_surfaceFrameSize[0];
+    state.surfaceFrameSize[1] = m_surfaceFrameSize[1];
+
     // Custom params
     for (int i = 0; i < kMaxCustomParams; ++i) {
         state.customParams[i][RhiConstants::ComponentX] = m_customParams[i].x();

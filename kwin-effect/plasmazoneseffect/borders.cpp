@@ -155,6 +155,19 @@ void PlasmaZonesEffect::updateWindowBorder(const QString& windowId, KWin::Effect
         return;
     }
 
+    // APP-WINDOW GATE: decoration applies to application windows only. Reuse the
+    // same structural app-window filter that snapping / zone management already
+    // use (shouldHandleWindow) — exactly as the animation path reuses it via
+    // shouldAnimateWindow — so the catch-all "window.floating" surface path never
+    // paints a border onto a non-window surface. resolveSurfacePathFor falls back
+    // to window.floating for ANY unmanaged window (docks, panels, the desktop,
+    // popups, dialogs, OSDs, tooltips, notifications, portal / plasma-shell
+    // surfaces, our own overlays), and the window-node border default is inherited
+    // there, so without this gate every such surface would get a border.
+    if (!shouldHandleWindow(w)) {
+        return;
+    }
+
     // DECORATE GATE: a window decorates when it is a member (the isTiledWindow
     // path that produced a non-floating surfacePath above) AND its resolved
     // profile declares a non-empty pack chain. An explicitly-empty chain means

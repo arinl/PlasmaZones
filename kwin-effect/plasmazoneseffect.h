@@ -811,8 +811,9 @@ private:
     /// `decorationProfileTreeJson` (Settings::decorationProfileTree). resolve()
     /// over a window's surface path (window.tiled / window.snapped /
     /// window.floating) yields the DecorationProfile that drives the window's
-    /// border appearance (width / radius / colours / showBorder) and its
-    /// surface-pack chain. Seeded in the constructor with a baseline matching
+    /// surface-pack chain and the per-pack parameters that style it (border
+    /// width / radius / colours are the pack's own params, not host fields).
+    /// Seeded in the constructor with a baseline matching
     /// today's per-field defaults so decoration renders correctly before the
     /// async fetch lands; replaced wholesale when the setting arrives.
     PhosphorSurfaceShaders::DecorationProfileTree m_decorationTree;
@@ -842,8 +843,9 @@ private:
     ///   • else snap member (SnapHandler::isTiledWindow)         → "window.snapped"
     ///   • else                                                  → "window.floating"
     /// Mirrors resolveBorderStateFor's autotile-first precedence, but the
-    /// membership predicates strip the showBorder coupling so the tree's
-    /// effectiveShowBorder() is the sole render gate (see updateWindowBorder).
+    /// membership predicates strip the showBorder coupling so the resolved
+    /// profile's effectiveChain() (an empty chain = no decoration) is the sole
+    /// render gate (see updateWindowBorder).
     QString resolveSurfacePathFor(const QString& windowId) const;
 
     /// Seed m_decorationTree's baseline with the same per-field defaults the

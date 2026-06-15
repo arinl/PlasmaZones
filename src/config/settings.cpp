@@ -1203,6 +1203,11 @@ PhosphorSurfaceShaders::DecorationProfileTree Settings::decorationProfileTree() 
 {
     const QVariantMap map =
         m_store->read<QVariantMap>(ConfigDefaults::surfaceGroup(), ConfigDefaults::surfaceDecorationTreeKey());
+    // The Surface schema registers a NON-empty default for this key (the
+    // serialized ConfigDefaults::decorationProfileTree), so a store built with
+    // the schema never returns empty here. The guard covers a store constructed
+    // WITHOUT the schema default (e.g. a bare test stub): fall back to the same
+    // canonical default rather than to an empty tree.
     if (map.isEmpty())
         return ConfigDefaults::decorationProfileTree();
     return PhosphorSurfaceShaders::DecorationProfileTree::fromJson(QJsonObject::fromVariantMap(map));
@@ -1230,6 +1235,11 @@ QString Settings::decorationProfileTreeJson() const
 void Settings::setDecorationProfileTreeJson(const QString& json)
 {
     if (json.isEmpty()) {
+        // Empty string = reset to the canonical default. Unlike the animation
+        // shaderProfileTree facade (which resets to an EMPTY tree, because an
+        // absent animation override means "no override"), the decoration tree
+        // has a meaningful non-empty default — the border baseline every window
+        // needs — so clearing it restores that default rather than an empty tree.
         setDecorationProfileTree(ConfigDefaults::decorationProfileTree());
         return;
     }

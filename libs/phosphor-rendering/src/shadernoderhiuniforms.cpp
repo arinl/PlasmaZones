@@ -294,19 +294,27 @@ void ShaderNodeRhi::uploadDirtyTextures(QRhi* rhi, QRhiCommandBuffer* cb)
 
     // Audio spectrum texture: resize if needed, upload when dirty
     if (m_audioSpectrumDirty && m_audioSpectrumTexture && m_audioSpectrumSampler) {
-        m_audioSpectrumDirty = false;
         const int bars = m_audioSpectrum.size();
         const QSize targetSize = bars > 0 ? QSize(bars, 1) : QSize(1, 1);
         if (m_audioSpectrumTexture->pixelSize() != targetSize) {
-            m_audioSpectrumTexture.reset(rhi->newTexture(QRhiTexture::RGBA8, targetSize));
-            if (!m_audioSpectrumTexture->create()) {
+            // Build the resized texture into a local and only swap it in on a
+            // successful create(), so a failed resize keeps the previous working
+            // texture and leaves m_audioSpectrumDirty set for a retry next frame
+            // (mirrors the self-healing user-texture path below) instead of
+            // stranding a non-created texture with dirty already cleared.
+            std::unique_ptr<QRhiTexture> resized(rhi->newTexture(QRhiTexture::RGBA8, targetSize));
+            if (!resized->create()) {
+                qCWarning(lcShaderNode) << "audio spectrum texture create() failed for size" << targetSize
+                                        << ", keeping previous texture; will retry next frame";
                 return;
             }
+            m_audioSpectrumTexture = std::move(resized);
             resetAllBindingsAndPipelines();
             if (!ensurePipeline()) {
                 return;
             }
         }
+        m_audioSpectrumDirty = false;
         QRhiResourceUpdateBatch* batch = rhi->nextResourceUpdateBatch();
         if (batch && bars > 0) {
             QImage img(bars, 1, QImage::Format_RGBA8888);

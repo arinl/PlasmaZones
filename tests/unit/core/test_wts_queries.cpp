@@ -289,14 +289,16 @@ private Q_SLOTS:
     }
 
     // =====================================================================
-    // P1: Snap-border frame inset
+    // P1: Snap-border frame inset (reserved seam)
     //
-    // When the snap show-border setting is on, a snapped window's frame is
-    // shrunk by the border width on every side so the border the KWin effect
-    // draws on the window edge sits INSIDE the zone, separating adjacent tiles.
-    // The fixture m_service has a null resolver (snapBorderInset() == 0), so it
-    // is the un-inset baseline; a fresh service with a stub resolver supplies
-    // the inset. Same layout + null screen manager → the only delta is the
+    // The snap-border inset seam shrinks a snapped window's frame by the inset
+    // on every side so a border drawn on the window edge would sit INSIDE the
+    // zone, separating adjacent tiles. Production snapBorderInset() is pinned to
+    // 0 (no inset); this test exercises the insetRect seam itself with a
+    // SYNTHETIC non-zero inset supplied by a stub resolver, NOT a show-border
+    // setting. The fixture m_service has a null resolver (snapBorderInset() == 0),
+    // so it is the un-inset baseline; a fresh service with a stub resolver
+    // supplies the inset. Same layout + null screen manager → the only delta is the
     // inset.
     // =====================================================================
 

@@ -574,6 +574,21 @@ int validateSurfacePack(const QString& packDir, QTextStream& out)
                 lints << QStringLiteral("multipass buffer shader missing: %1").arg(bufName);
             }
         }
+        // bufferWraps / bufferFilters are positionally aligned to bufferShaders;
+        // surplus entries beyond the buffer count are silently ignored at load
+        // (surfaceshaderregistry.cpp), so flag a length mismatch the author
+        // likely did not intend.
+        const auto lintBufferArrayLen = [&](QLatin1String key) {
+            const int extra = doc.object().value(key).toArray().size() - declaredBuffers.size();
+            if (extra > 0) {
+                lints << QStringLiteral("%1 has %2 more entr%3 than buffer shaders (surplus ignored at load)")
+                             .arg(QString(key))
+                             .arg(extra)
+                             .arg(extra == 1 ? QStringLiteral("y") : QStringLiteral("ies"));
+            }
+        };
+        lintBufferArrayLen(QLatin1String("bufferWraps"));
+        lintBufferArrayLen(QLatin1String("bufferFilters"));
         const double rawScale = doc.object().value(QLatin1String("bufferScale")).toDouble(1.0);
         if (rawScale < 0.125 || rawScale > 1.0) {
             lints << QStringLiteral("bufferScale out of range [0.125, 1.0]: %1 (clamped at load)").arg(rawScale);

@@ -596,6 +596,13 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChainComposite(KWin::EffectWind
         if (!pk || !pk->shader) {
             continue; // skip a failed pack; the composite carries through unchanged
         }
+        // Defensive: chainBufferTex is sized to chain.size() in the realloc block
+        // above and stays in lockstep with `chain`, but guard the unchecked
+        // operator[] in case a future edit decouples the two (out-of-bounds [] is
+        // UB; the bounds-correct outcome is to skip the pack's buffer passes).
+        if (k >= static_cast<int>(state.chainBufferTex.size())) {
+            continue;
+        }
         const std::vector<std::unique_ptr<KWin::GLTexture>>& bufs = state.chainBufferTex[k];
 
         // 2a: pack k's buffer passes, sampling the running composite as uTexture0.

@@ -10,7 +10,7 @@ import org.kde.kirigami as Kirigami
  * @brief Per-surface decoration override card. Mirrors AnimationEventCard.
  *
  * One card per surface path. CATEGORY paths (window, popup) and the
- * standalone surfaces (osd, overlay) are alwaysEnabled ROOTS — there is no
+ * standalone osd surface are alwaysEnabled ROOTS — there is no
  * global decoration default above them, so they have no override toggle and
  * always edit their own profile (a category root additionally shows the
  * "applies to all children" cascade banner). Concrete leaf paths under a
@@ -33,7 +33,7 @@ import org.kde.kirigami as Kirigami
  *   - isParentNode: bool — category node; shows the cascade banner.
  *   - showTitlebarToggle: bool — exposes the "Hide title bar" control. Title
  *     bars only make sense for WINDOWS, so only the window-subtree cards set
- *     this true; daemon surfaces (osd / popup / overlay) leave it false.
+ *     this true; daemon surfaces (osd / popup) leave it false.
  */
 Item {
     id: root
@@ -241,7 +241,7 @@ Item {
                 }
 
                 // Title bar — WINDOW surfaces only. Daemon surfaces (osd /
-                // popup / overlay) have no title bar concept, so the host leaves
+                // popup) have no title bar concept, so the host leaves
                 // showTitlebarToggle false and this whole section is omitted.
                 SettingsSeparator {
                     visible: root.showTitlebarToggle

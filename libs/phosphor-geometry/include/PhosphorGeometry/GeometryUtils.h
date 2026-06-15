@@ -66,8 +66,9 @@ PHOSPHORGEOMETRY_EXPORT QString rectToJson(const QRect& rect);
 // slot, separating adjacent windows by the inset width). @p inset <= 0 or an
 // empty @p rect is a no-op. Degenerate clamp: on a rect too small to absorb
 // 2*inset, width/height are kept >= 1 px rather than collapsing to an empty or
-// inverted rect. Shared by the snap (PhosphorPlacement) and autotile
-// (PhosphorTileEngine) paths so the two inset gates cannot drift.
+// inverted rect. Used only by the snap (PhosphorPlacement) path; the autotile
+// (PhosphorTileEngine) path is deliberately un-inset (fills the zone exactly)
+// and does not call this helper.
 PHOSPHORGEOMETRY_EXPORT QRect insetRect(const QRect& rect, int inset);
 
 } // namespace PhosphorGeometry

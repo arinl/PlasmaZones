@@ -26,7 +26,8 @@
 namespace PhosphorPlacement {
 
 // Snapped-window frames are passed through the shared
-// PhosphorGeometry::insetRect helper (also used by the autotile path) with the
+// PhosphorGeometry::insetRect helper (the autotile path is deliberately
+// un-inset and does not call it) with the
 // inset from IGeometryResolver::snapBorderInset, which returns 0 in all
 // configurations today: the KWin effect's border shader recolours the window's
 // own outermost band INSIDE the frame, so frames are not inset and a snapped
@@ -235,10 +236,11 @@ QRect WindowTrackingService::zoneGeometry(const QString& zoneId, const QString& 
                                  : PhosphorLayout::EdgeGaps::uniform(PhosphorEngine::GeometryDefaults::OuterGap);
     QRect geo =
         PhosphorZones::GeometryUtils::getZoneGeometryForScreen(m_screenManager, zone, screen, screenId, layout, zp, og);
-    // Inset for the snap border drawn on the window's own edge (no-op when the
-    // snap show-border setting is off). Single chokepoint for actual window
-    // frames — snap-assist previews use getZoneGeometryWithGaps directly
-    // (buildEmptyZoneList) and bypass this, so previews stay un-inset.
+    // Reserved snap-border inset seam: snapBorderInset() returns 0 in every
+    // config today (the border shader recolours the window's own band, no
+    // geometry inset), so this is currently a no-op. Single chokepoint for
+    // actual window frames — snap-assist previews use getZoneGeometryWithGaps
+    // directly (buildEmptyZoneList) and bypass this, so previews stay un-inset.
     int inset = m_geometryResolver ? m_geometryResolver->snapBorderInset() : 0;
     return PhosphorGeometry::insetRect(geo, inset);
 }
@@ -281,7 +283,8 @@ QRect WindowTrackingService::multiZoneGeometry(const QStringList& zoneIds, const
     }
     // Inset the COMBINED span once (not per sub-zone) so the border traces the
     // outer edge of the multi-zone frame, matching the single per-mode snap
-    // border the effect draws. No-op when the snap show-border setting is off.
+    // border the effect draws. snapBorderInset() returns 0 in every config
+    // today (reserved seam), so this is currently a no-op.
     int inset = m_geometryResolver ? m_geometryResolver->snapBorderInset() : 0;
     return PhosphorGeometry::insetRect(combined.toAlignedRect(), inset);
 }

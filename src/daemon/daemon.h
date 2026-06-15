@@ -918,8 +918,10 @@ private:
     QTimer m_reapplyGeometriesTimer;
 
     // Startup inset correction (reserved-seam machinery). The per-window border
-    // inset (PhosphorGeometry::insetRect, applied by resolveZoneGeometry and
-    // applyTiling) is pinned to 0 in all configurations today — see
+    // inset (PhosphorGeometry::insetRect, applied by the snap path's
+    // resolveZoneGeometry; the autotile applyTiling path is deliberately
+    // un-inset and never calls insetRect) is pinned to 0 in all configurations
+    // today — see
     // IGeometryResolver::snapBorderInset — so this correction is currently inert
     // for its original purpose (re-insetting session-restored windows once the
     // snap/autotile show-border state finished loading; with inset 0 windows

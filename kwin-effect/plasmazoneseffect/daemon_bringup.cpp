@@ -159,8 +159,8 @@ void PlasmaZonesEffect::continueDaemonReadySetup()
     // the daemon's bounded LRU is empty after a fresh registration (whether
     // first-start or restart), so any handle the kwin-effect would otherwise
     // skip on assumption-of-residence must be re-captured. Without this
-    // reset, the first ~24 windows the user snap-assists toward after a
-    // daemon restart silently fall back to icons.
+    // reset, windows the user snap-assists toward shortly after a daemon
+    // restart could silently fall back to icons until the set is rebuilt.
     if (m_snapAssistHandler) {
         m_snapAssistHandler->resetRecentlyPostedThumbnails();
     }

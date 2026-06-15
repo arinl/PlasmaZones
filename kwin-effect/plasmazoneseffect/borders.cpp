@@ -317,8 +317,9 @@ const PhosphorCompositor::BorderState* PlasmaZonesEffect::resolveBorderStateFor(
 QString PlasmaZonesEffect::resolveSurfacePathFor(const QString& windowId) const
 {
     // MEMBERSHIP-only resolution — IGNORES the owning mode's legacy showBorder
-    // gate so the tree's effectiveShowBorder() is the sole render gate (see
-    // updateWindowBorder). isTiledWindow tests bucket membership without the
+    // gate so the resolved profile's effectiveChain() (an empty chain = no
+    // decoration) is the sole render gate (see updateWindowBorder). isTiledWindow
+    // tests bucket membership without the
     // showBorder coupling shouldShowBorderForWindow adds, so membership and the
     // show gate are cleanly separated WITHOUT any phosphor-compositor lib change
     // (both predicates already exist). Same autotile-first precedence as

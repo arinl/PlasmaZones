@@ -462,7 +462,7 @@ target_link_libraries(test_zone_shader_item PRIVATE Qt6::Test Qt6::Core Qt6::Qui
 add_test(NAME test_zone_shader_item COMMAND test_zone_shader_item)
 
 add_executable(test_surface_shader_item ui/test_surface_shader_item.cpp)
-target_link_libraries(test_surface_shader_item PRIVATE Qt6::Test Qt6::Core Qt6::Quick Qt6::GuiPrivate plasmazones_rendering)
+target_link_libraries(test_surface_shader_item PRIVATE Qt6::Test Qt6::Core Qt6::Gui Qt6::Quick Qt6::GuiPrivate plasmazones_rendering)
 add_test(NAME test_surface_shader_item COMMAND test_surface_shader_item)
 
 # Pure-data byte-layout test for the zone UBO extension. No GPU / scene graph

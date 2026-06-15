@@ -1303,7 +1303,7 @@ bool PlasmaZonesEffect::beginShaderTransition(KWin::EffectWindow* window,
     }
     // A surface-extent transition paints across the whole output. The
     // off-frame band the shader sweeps is covered by the unconditional
-    // `effects->addRepaintFull()` immediately below (line 1247) —
+    // `effects->addRepaintFull()` at the end of this function —
     // `addLayerRepaint` itself clips its argument back to the window-
     // item's bounding rect via the scene's `mapFromScene` (see
     // paint_pipeline.cpp's commentary), so widening `repaintRect` to

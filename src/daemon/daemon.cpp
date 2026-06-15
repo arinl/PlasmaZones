@@ -1141,7 +1141,8 @@ bool Daemon::init()
 
     // Runtime inset correction debounce (see daemon.h). Armed by any of the six
     // border-setting change signals; coalesces a multi-key KCM batch save into a
-    // single resnap + retile so existing windows pick up the new inset.
+    // single resnap + retile so existing windows pick up the new border settings
+    // (the inset seam is pinned to 0 today, so the resnap is inset-inert).
     m_borderInsetReapplyTimer.setSingleShot(true);
     m_borderInsetReapplyTimer.setInterval(GEOMETRY_UPDATE_DEBOUNCE_MS);
     connect(&m_borderInsetReapplyTimer, &QTimer::timeout, this, &Daemon::reapplyBorderInsets);

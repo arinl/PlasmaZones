@@ -822,17 +822,36 @@ public:
         return {};
     }
 
+    /// Build the `border` pack's parameter map from the given values. SINGLE
+    /// source for the param ids declared in data/surface/border/metadata.json
+    /// (borderWidth / cornerRadius / useSystemAccent / activeColor /
+    /// inactiveColor) — shared by decorationProfileTree() below and the v3->v4
+    /// seed migration (ConfigMigration::seedDecorationProfileTree) so a pack
+    /// param-id rename touches exactly one place instead of drifting between
+    /// the two producers.
+    static QVariantMap borderPackParams(int borderWidth, int cornerRadius, bool useSystemAccent,
+                                        const QColor& activeColor, const QColor& inactiveColor)
+    {
+        QVariantMap params;
+        params.insert(QStringLiteral("borderWidth"), borderWidth);
+        params.insert(QStringLiteral("cornerRadius"), cornerRadius);
+        params.insert(QStringLiteral("useSystemAccent"), useSystemAccent);
+        params.insert(QStringLiteral("activeColor"), activeColor.name(QColor::HexArgb));
+        params.insert(QStringLiteral("inactiveColor"), inactiveColor.name(QColor::HexArgb));
+        return params;
+    }
+
     /// Default DecorationProfileTree — the fallback the typed
     /// `Settings::decorationProfileTree()` returns when the Surface group holds
     /// no `DecorationProfileTree` entry.
     ///
     /// Borders + title-bar hiding only make sense for WINDOWS, not daemon
-    /// surfaces (osd / popup / overlay). So the BASELINE is empty/neutral (no
-    /// chain, no parameters, no hide-titlebar engaged) and the border default
-    /// lives on the `window` node instead: window.tiled/snapped/floating
-    /// inherit `window` -> border, while osd/popup/overlay inherit the empty
-    /// baseline -> no decoration by default. The `window` override carries a
-    /// single `border` pack plus its PARAMETERS (the pack reads
+    /// surfaces (osd / popup). So the BASELINE is empty/neutral (no chain, no
+    /// parameters, no hide-titlebar engaged) and the border default lives on the
+    /// `window` node instead: window.tiled/snapped/floating inherit `window` ->
+    /// border, while osd/popup inherit the empty baseline -> no decoration by
+    /// default. The `window` override carries a single `border` pack plus its
+    /// PARAMETERS (the pack reads
     /// p_borderWidth/p_cornerRadius/p_activeColor/p_inactiveColor/
     /// p_useSystemAccent from these); param ids match
     /// data/surface/border/metadata.json exactly.
@@ -846,15 +865,11 @@ public:
         window.chain = QStringList{surfaceShaderEffectId()};
         window.hideTitlebar = ::PhosphorCompositor::DecorationDefaults::HideTitleBars;
 
-        QVariantMap borderParams;
-        borderParams.insert(QStringLiteral("borderWidth"), ::PhosphorCompositor::DecorationDefaults::BorderWidth);
-        borderParams.insert(QStringLiteral("cornerRadius"), ::PhosphorCompositor::DecorationDefaults::BorderRadius);
-        borderParams.insert(QStringLiteral("useSystemAccent"), true);
-        borderParams.insert(QStringLiteral("activeColor"), autotileBorderColor().name(QColor::HexArgb));
-        borderParams.insert(QStringLiteral("inactiveColor"), autotileInactiveBorderColor().name(QColor::HexArgb));
-
         QVariantMap params;
-        params.insert(surfaceShaderEffectId(), borderParams);
+        params.insert(surfaceShaderEffectId(),
+                      borderPackParams(::PhosphorCompositor::DecorationDefaults::BorderWidth,
+                                       ::PhosphorCompositor::DecorationDefaults::BorderRadius, true,
+                                       autotileBorderColor(), autotileInactiveBorderColor()));
         window.parameters = params;
 
         ::PhosphorSurfaceShaders::DecorationProfileTree tree;

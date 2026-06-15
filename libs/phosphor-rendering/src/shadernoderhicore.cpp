@@ -593,6 +593,11 @@ void ShaderNodeRhi::prepare()
                 cb->endPass();
 
                 if (i + 1 < n && m_ubo) {
+                    // Inter-pass write→read barrier only: re-uploading 4 bytes at
+                    // offset 0 (the first float of qt_Matrix) forces the backend to
+                    // serialize pass i's writes before pass i+1 samples its output.
+                    // The value is immediately re-pinned by the next pass / final
+                    // restore, so this is a sync hint, not a meaningful data update.
                     QRhiResourceUpdateBatch* barrier = rhi->nextResourceUpdateBatch();
                     if (barrier) {
                         barrier->updateDynamicBuffer(m_ubo.get(), 0, 4, m_uboProfile->mutableData());

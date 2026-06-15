@@ -157,14 +157,6 @@ public:
     virtual void setAppField1(int /*value*/)
     {
     }
-
-    /// Whether the runtime should feed physical (device-pixel) resolution into
-    /// width/height. The overlay path uses physical resolution; a future
-    /// surface profile may opt out.
-    virtual bool requiresPhysicalResolution() const
-    {
-        return true;
-    }
 };
 
 } // namespace PhosphorShaders

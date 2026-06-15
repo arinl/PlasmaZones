@@ -196,11 +196,15 @@ PlasmaZonesEffect::PlasmaZonesEffect()
     // Surface shader pack hot-reload: when a data/surface pack changes on disk,
     // drop EVERY compiled surface pack so the next paint recompiles each
     // referenced pack against the new source, and repaint so decorated windows
-    // pick it up. The compiled packs are shared (not per-transition), so there is
-    // no per-window transition cache to drain first — unlike the animation
-    // registry above. The next compiledPack() call recompiles lazily per pack id.
+    // pick it up. Also drop the per-window multipass FBO state: a recompiled pack
+    // whose buffer-pass COUNT changed would otherwise under-render, because the
+    // composite path's chainBufferTex realloc keys on the chain pack-id list (and
+    // size), not on each pack's buffer-pass count — only clearing it here forces
+    // the next paint to reallocate against the new pass count. The next
+    // compiledPack() call recompiles lazily per pack id.
     connect(&m_surfaceShaderRegistry, &PhosphorSurfaceShaders::SurfaceShaderRegistry::effectsChanged, this, [this]() {
         m_compiledPacks.clear();
+        m_surfaceMultipass.clear();
         if (KWin::effects) {
             KWin::effects->addRepaintFull();
         }
@@ -726,6 +730,14 @@ PlasmaZonesEffect::PlasmaZonesEffect()
         // between unregistration and the next daemon's fetch. continueDaemonReady
         // setup re-clears and refetches on bringup; this closes the gap before it.
         m_virtualScreensReady = false;
+        // Drop the local floating-window set too: the daemon's float state is
+        // ephemeral and gone with it, so clear now rather than only at the next
+        // bringup — otherwise isWindowFloating() reads stale `true` in the gap
+        // between unregistration and re-sync. continueDaemonReadySetup re-fetches
+        // the authoritative set on bringup (mirrors the m_virtualScreensReady reset
+        // above; m_navigationHandler is a never-reset member, dereferenced
+        // unguarded like the other handlers in this slot).
+        m_navigationHandler->clearAllFloatingState();
         // Also clear the bridge-registration in-flight gate. Without
         // this, a daemon-restart racing the in-flight registerBridge
         // reply leaves the gate set: the new daemon's `daemonReady`

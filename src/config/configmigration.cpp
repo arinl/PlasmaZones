@@ -1761,7 +1761,7 @@ void ConfigMigration::seedDecorationProfileTree(QJsonObject& root)
     // to today's defaults for any individual key the user never set. Borders +
     // title-bar hiding are WINDOW concerns (the old keys lived under
     // Tiling.Appearance — window settings), so the migrated profile is the
-    // `window` OVERRIDE, NOT the baseline: daemon surfaces (osd/popup/overlay)
+    // `window` OVERRIDE, NOT the baseline: daemon surfaces (osd/popup)
     // inherit the empty baseline and get no window decoration. The border
     // appearance is NOT a set of decoration fields — width/radius/colours are
     // the `border` pack's PARAMETERS, seeded into parameters["border"] under
@@ -1805,12 +1805,10 @@ void ConfigMigration::seedDecorationProfileTree(QJsonObject& root)
         ? colorOr(colors.value(ConfigDefaults::inactiveKey()).toString(), ConfigDefaults::autotileInactiveBorderColor())
         : ConfigDefaults::autotileInactiveBorderColor();
 
-    QVariantMap borderParams;
-    borderParams.insert(QStringLiteral("borderWidth"), borderWidth);
-    borderParams.insert(QStringLiteral("cornerRadius"), cornerRadius);
-    borderParams.insert(QStringLiteral("useSystemAccent"), useSystemAccent);
-    borderParams.insert(QStringLiteral("activeColor"), activeColor.name(QColor::HexArgb));
-    borderParams.insert(QStringLiteral("inactiveColor"), inactiveColor.name(QColor::HexArgb));
+    // Build the border-pack param block through the shared ConfigDefaults helper
+    // so the param ids stay in lockstep with ConfigDefaults::decorationProfileTree().
+    const QVariantMap borderParams =
+        ConfigDefaults::borderPackParams(borderWidth, cornerRadius, useSystemAccent, activeColor, inactiveColor);
 
     QVariantMap params;
     // The border params are the BORDER pack's parameters; file them under the

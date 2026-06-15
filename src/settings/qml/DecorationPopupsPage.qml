@@ -7,12 +7,11 @@ import QtQuick
 //
 // "All Popups" (path "popup") is the alwaysEnabled root for the transient
 // popups (snap assist, zone selector, layout picker); each can override it via
-// the DecorationProfileTree walk-up. The runtime zone overlay is its own root
-// (not under "popup"), so it is a separate alwaysEnabled card. Popups have no
-// title bar, so none expose the toggle.
+// the DecorationProfileTree walk-up. Popups have no title bar, so none expose
+// the toggle.
 DecorationSurfaceCardList {
     Accessible.name: i18n("Popup decoration surfaces")
-    headerText: i18n("Decoration for the transient popups and the zone overlay. \"All Popups\" is the default; each popup can override it.")
+    headerText: i18n("Decoration for the transient popups. \"All Popups\" is the default; each popup can override it.")
     surfaceModel: [
         {
             "surfacePath": "popup",

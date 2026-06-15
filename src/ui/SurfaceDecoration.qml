@@ -95,6 +95,13 @@ Item {
     property Item shaderAnchorItem: null
 
     function _resolveAnchor() {
+        // Un-demote the anchor we are leaving before dropping our reference: if
+        // it was demoted (shaderAnchor=false while decorationActive), it would
+        // otherwise be stranded with the property cleared. Masked today because
+        // the Loader re-instantiates content per show, but correct regardless of
+        // whether the anchor item is destroyed or merely swapped.
+        if (shaderAnchorItem)
+            shaderAnchorItem.shaderAnchor = true;
         shaderAnchorItem = contentItem ? _findShaderAnchor(contentItem) : null;
         _applyAnchorRouting();
     }
@@ -188,6 +195,10 @@ Item {
         // Anchor rect mapped into this host's coordinate space. The anchor lives
         // deep inside the loaded content; mapToItem walks the transform chain so
         // the decoration lands exactly over the card regardless of nesting.
+        // Assumes the overlay host uses a fixed anchors.fill layout (it does):
+        // mapToItem is not reactive to an ancestor transform change, so this
+        // binding re-resolves only on decorationActive / shaderAnchorItem change,
+        // not if a future host animated the anchor's ancestors mid-frame.
         readonly property point anchorOrigin: (root.decorationActive && root.shaderAnchorItem) ? root.shaderAnchorItem.mapToItem(root, 0, 0) : Qt.point(0, 0)
 
         // SurfaceAnimator anchor (compose — see _applyAnchorRouting). When

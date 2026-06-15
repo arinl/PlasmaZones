@@ -45,6 +45,13 @@ SurfaceShaderItem::SurfaceShaderItem(QQuickItem* parent)
         includePaths.append(dir);
     }
     setShaderIncludePaths(includePaths);
+
+    // The surface UBO carries qt_Opacity (pushed from opacity() each
+    // updatePaintNode), but the base ShaderEffect does not repaint on an opacity
+    // change. Schedule a paint when the item's own opacity changes so a host
+    // fading the decoration (the "host can fade the decoration" contract below)
+    // actually re-uploads the new value instead of going stale.
+    connect(this, &QQuickItem::opacityChanged, this, &QQuickItem::update);
 }
 
 SurfaceShaderItem::~SurfaceShaderItem()

@@ -115,16 +115,6 @@ void BaseUniformProfile::fill(const UboFrameState& state)
         m_u.iTextureResolution[i][2] = 0.0f;
         m_u.iTextureResolution[i][3] = 0.0f;
     }
-
-    // NDC Y-orientation correction baked into qt_Matrix (folded in from
-    // uploadDirtyTextures()). Column-major float[16]: index 5 is the Y-scale
-    // (m11); negate it only when NDC is Y-up. See the BaseUniforms upload-path
-    // comment in the render node for the full rationale.
-    std::memset(m_u.qt_Matrix, 0, sizeof(m_u.qt_Matrix));
-    m_u.qt_Matrix[0] = 1.0f;
-    m_u.qt_Matrix[5] = state.yUpInNDC ? -1.0f : 1.0f;
-    m_u.qt_Matrix[10] = 1.0f;
-    m_u.qt_Matrix[15] = 1.0f;
 }
 
 // ============================================================================

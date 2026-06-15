@@ -370,9 +370,10 @@ void WindowDragAdaptor::dragStopped(const QString& windowId, int cursorX, int cu
             }
             // The captured rect is the raw (un-inset) zone span used to draw the
             // live drag highlight. Re-resolve the COMMITTED frame through the WTS
-            // wrapper so it is inset by the snap-border width when the border is
-            // shown (no-op when off), matching every other committed snap path.
-            // Fall back to the captured rect if tracking is unavailable.
+            // wrapper so it passes through the reserved snap-border inset seam
+            // (snapBorderInset() returns 0 in every config today, so no inset is
+            // applied), matching every other committed snap path. Fall back to
+            // the captured rect if tracking is unavailable.
             const QRect committedGeometry = m_windowTracking
                 ? m_windowTracking->service()->resolveZoneGeometry(allZoneIds, releaseScreenId)
                 : capturedMultiZoneGeometry;

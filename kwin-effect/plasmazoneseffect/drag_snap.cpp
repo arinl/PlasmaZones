@@ -494,7 +494,22 @@ void PlasmaZonesEffect::applySnapGeometry(KWin::EffectWindow* window, const QRec
     // filter when the rule's class matcher matches. Falling through to
     // the non-animated path just runs the moveResize without the snap
     // motion / shader.
-    if (!skipAnimation && !allowDuringDrag && m_windowAnimator->isEnabled() && shouldAnimateWindow(window)) {
+    //
+    // BUT never let the snap/move geometry morph supersede an in-flight
+    // window.open animation. A window that is snapped / placed AS IT OPENS
+    // (snap-restore, autotile, daemon placement) should show its OPEN animation
+    // at the snapped position, not a move morph — otherwise the geometry morph
+    // (the default for snap/move) installs over the just-started open transition
+    // and the open animation never plays. The open transition holds the
+    // WindowAddedGrabRole (addedGrabHeld), so detect it and fall through to the
+    // instant-moveResize path below: the window jumps to its snapped geometry and
+    // the open animation plays over it. A snap that is NOT on a freshly-opened
+    // window (drag-snap, retile, focus move) has no such transition and morphs
+    // normally.
+    const PlasmaZones::ShaderTransition* const inFlight = m_shaderManager.findTransition(window);
+    const bool openAnimationInFlight = inFlight && inFlight->addedGrabHeld;
+    if (!skipAnimation && !allowDuringDrag && !openAnimationInFlight && m_windowAnimator->isEnabled()
+        && shouldAnimateWindow(window)) {
         const QRectF targetFrame(geo);
 
         // Bail before any work when the in-flight animation already

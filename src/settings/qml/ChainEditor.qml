@@ -11,10 +11,14 @@ import org.plasmazones.common as PZCommon
  * @brief Ordered editor for a chain of decoration shader packs.
  *
  * Renders the chain as an ordered list of pack rows. Each row shows the
- * pack's display name, reorder up/down arrows, a remove (x) button, and an
- * expander that reveals a ShaderParameterEditor bound to that pack's
- * parameter schema + the surface's per-pack parameter overrides. An "Add"
- * combo at the bottom appends a pack not already in the chain.
+ * pack's display name, reorder up/down arrows, and a remove (x) button.
+ * Directly beneath each row, a ShaderParameterEditor is shown inline
+ * (whenever the pack declares parameters) bound to that pack's parameter
+ * schema + the surface's per-pack parameter overrides — mirroring the
+ * always-visible shader editor in AnimationProfileEditor, so the per-pack
+ * settings (e.g. the Border pack's width / radius / colours) are editable
+ * in place rather than hidden behind an expander. An "Add" combo at the
+ * bottom appends a pack not already in the chain.
  *
  * Pure props-and-signals — the component owns no persistence. The host
  * (DecorationGeneralPage / DecorationSurfaceCard) feeds:
@@ -39,8 +43,6 @@ ColumnLayout {
     /// Read-only mode renders the chain as a static summary (used by the
     /// per-surface card's inherited preview).
     property bool readOnly: false
-    // Which pack row is expanded to show its parameter editor. -1 = none.
-    property int _expandedIndex: -1
 
     signal chainChangeRequested(var newChain)
     signal paramChangeRequested(string packId, string paramId, var value)
@@ -125,7 +127,6 @@ ColumnLayout {
             readonly property var _effect: root._effectFor(packDelegate.modelData)
             readonly property var _schema: (packDelegate._effect && packDelegate._effect.parameters) ? packDelegate._effect.parameters : []
             readonly property var _values: (root.packParameters && root.packParameters[packDelegate.modelData]) ? root.packParameters[packDelegate.modelData] : ({})
-            readonly property bool _expanded: root._expandedIndex === packDelegate.index
 
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
@@ -133,15 +134,6 @@ ColumnLayout {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Kirigami.Units.smallSpacing
-
-                // Expander — only when the pack has parameters and we're editable.
-                ToolButton {
-                    visible: !root.readOnly && packDelegate._schema.length > 0
-                    icon.name: packDelegate._expanded ? "go-down-symbolic" : "go-next-symbolic"
-                    display: ToolButton.IconOnly
-                    Accessible.name: i18n("Toggle parameters for %1", root._displayName(packDelegate.modelData))
-                    onClicked: root._expandedIndex = packDelegate._expanded ? -1 : packDelegate.index
-                }
 
                 Label {
                     Layout.fillWidth: true
@@ -172,19 +164,19 @@ ColumnLayout {
                     icon.name: "edit-delete-remove"
                     display: ToolButton.IconOnly
                     Accessible.name: i18n("Remove %1", root._displayName(packDelegate.modelData))
-                    onClicked: {
-                        if (root._expandedIndex === packDelegate.index)
-                            root._expandedIndex = -1;
-                        root.chainChangeRequested(root._withRemoved(packDelegate.index));
-                    }
+                    onClicked: root.chainChangeRequested(root._withRemoved(packDelegate.index))
                 }
             }
 
             // ── Per-pack parameters ──────────────────────────────────────
+            // Shown inline whenever the pack declares parameters (and we're
+            // editable) — matching the always-visible shader editor in
+            // AnimationProfileEditor, so per-pack settings are discoverable
+            // and editable in place rather than behind a toggle.
             PZCommon.ShaderParameterEditor {
                 Layout.fillWidth: true
                 Layout.leftMargin: Kirigami.Units.largeSpacing
-                visible: packDelegate._expanded && packDelegate._schema.length > 0
+                visible: !root.readOnly && packDelegate._schema.length > 0
 
                 compact: true
                 enableGroups: true

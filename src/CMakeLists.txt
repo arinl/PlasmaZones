@@ -342,6 +342,8 @@ set(plasmazones_rendering_SRCS
     daemon/rendering/zoneshaderitem.h
     daemon/rendering/zoneshaderitem.cpp
     daemon/rendering/zoneshaderitem/setters.cpp
+    daemon/rendering/surfaceshaderitem.h
+    daemon/rendering/surfaceshaderitem.cpp
     daemon/rendering/zonelabeltexturebuilder.h
     daemon/rendering/zonelabeltexturebuilder.cpp
 )
@@ -358,6 +360,12 @@ target_link_libraries(plasmazones_rendering
         plasmazones_core
         Qt6::Quick
         PhosphorRendering::PhosphorRendering
+        # SurfaceShaderItem constructs a PhosphorSurfaceShaders::SurfaceUniformProfile
+        # to drive the shared render node's surface UBO. Reachable transitively via
+        # plasmazones_core (which PUBLIC-links it for DecorationProfileTree), but
+        # named explicitly here because surfaceshaderitem.{h,cpp} depend on the
+        # surface library's symbols directly.
+        PhosphorSurface::PhosphorSurface
     PRIVATE
         Qt6::GuiPrivate
         Qt6::ShaderToolsPrivate

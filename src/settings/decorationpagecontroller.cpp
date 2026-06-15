@@ -29,6 +29,23 @@ DecorationProfileTree readTree(ISettings* settings)
     return settings ? settings->decorationProfileTree() : DecorationProfileTree{};
 }
 
+/// Overridden paths strictly BELOW @p path (its descendants), e.g. for
+/// "window" → every overridden "window.*". Excludes @p path itself. These are
+/// the surfaces that shadow the parent node.
+QStringList overrideDescendantsOf(const DecorationProfileTree& tree, const QString& path)
+{
+    QStringList out;
+    if (path.isEmpty())
+        return out;
+    const QString prefix = path + QLatin1Char('.');
+    const QStringList overridden = tree.overriddenPaths();
+    for (const QString& p : overridden) {
+        if (p.startsWith(prefix))
+            out.append(p);
+    }
+    return out;
+}
+
 /// Read the DIRECT profile at @p path: the baseline for the empty path,
 /// otherwise the per-surface override (default-constructed = all-inherit
 /// when there is no override).
@@ -234,6 +251,27 @@ bool DecorationPageController::clearOverride(const QString& path)
         return false;
     m_settings->setDecorationProfileTree(tree);
     return true;
+}
+
+int DecorationPageController::overrideDescendantCount(const QString& path) const
+{
+    if (!m_settings)
+        return 0;
+    return overrideDescendantsOf(readTree(m_settings), path).size();
+}
+
+int DecorationPageController::clearOverrideDescendants(const QString& path)
+{
+    if (!m_settings)
+        return 0;
+    DecorationProfileTree tree = readTree(m_settings);
+    const QStringList toClear = overrideDescendantsOf(tree, path);
+    if (toClear.isEmpty())
+        return 0;
+    for (const QString& p : toClear)
+        tree.clearOverride(p);
+    m_settings->setDecorationProfileTree(tree);
+    return toClear.size();
 }
 
 } // namespace PlasmaZones

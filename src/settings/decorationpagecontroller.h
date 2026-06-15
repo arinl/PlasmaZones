@@ -164,6 +164,17 @@ public:
     /// baseline fields). @return true when an override was removed.
     Q_INVOKABLE bool clearOverride(const QString& path);
 
+    /// Number of descendant surfaces under @p path that carry their own
+    /// override — they SHADOW this parent node (the resolve walk stops at the
+    /// descendant's own profile, so the parent's chain never reaches them).
+    /// Drives the parent-node "Clear shadowing children" affordance, mirroring
+    /// AnimationsPageController::shaderOverrideDescendantCount.
+    Q_INVOKABLE int overrideDescendantCount(const QString& path) const;
+
+    /// Clear every descendant override under @p path so the whole subtree
+    /// inherits this node again. @return the number of overrides cleared.
+    Q_INVOKABLE int clearOverrideDescendants(const QString& path);
+
 Q_SIGNALS:
     /// Re-emit of `SurfaceShaderRegistry::effectsChanged` so QML can
     /// rebind without poking at the registry directly.

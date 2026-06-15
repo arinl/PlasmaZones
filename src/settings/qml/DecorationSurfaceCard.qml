@@ -62,6 +62,9 @@ Item {
     property var _chain: []
     property var _params: ({})
     property string _parentChainText: ""
+    // Parent-node only: count of descendant surfaces with their own override
+    // that shadow this node, driving the "Clear shadowing children" warning.
+    property int _shadowingChildrenCount: 0
 
     // Ancestor breadcrumb as raw dotted paths joined "child ← parent", matching
     // AnimationEventCard.parentChainText (labels are not re-derived in C++).
@@ -82,6 +85,7 @@ Item {
         root._chain = root.bridge.chainAt(root.surfacePath);
         root._params = (root._raw && root._raw.parameters) ? root._raw.parameters : ({});
         root._parentChainText = root._computeParentChainText();
+        root._shadowingChildrenCount = root.bridge.overrideDescendantCount(root.surfacePath);
     }
 
     // Engage a per-surface override (leaf toggle ON): seed the chain with the
@@ -164,6 +168,29 @@ Item {
                         return i18n("Settings here apply to all child surfaces unless individually overridden.");
                     return root._parentChainText.length > 0 ? i18n("Inheriting from: %1", root._parentChainText) : i18n("Using global defaults");
                 }
+            }
+
+            // ── Shadowing-children warning (parent-node cards only) ───────
+            // A descendant surface with its own override shadows this parent:
+            // the DecorationProfileTree resolve stops at the descendant's own
+            // profile, so this node's chain never reaches it — even though the
+            // parent card visually shows its own settings. Surface it with
+            // one-click remediation (mirrors AnimationEventCard).
+            Kirigami.InlineMessage {
+                Layout.fillWidth: true
+                type: Kirigami.MessageType.Warning
+                visible: root.isParentNode && root._shadowingChildrenCount > 0
+                text: i18np("%n descendant surface has its own override that shadows this parent.", "%n descendant surfaces have overrides that shadow this parent.", root._shadowingChildrenCount)
+                actions: [
+                    Kirigami.Action {
+                        text: i18n("Clear shadowing children")
+                        icon.name: "edit-clear-all"
+                        onTriggered: {
+                            if (root.bridge)
+                                root.bridge.clearOverrideDescendants(root.surfacePath);
+                        }
+                    }
+                ]
             }
 
             Label {

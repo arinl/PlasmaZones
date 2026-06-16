@@ -92,7 +92,11 @@ Item {
     // currently resolved chain so the override starts visibly equal to what was
     // inherited, then the user diverges from there.
     function _engageOverride() {
-        if (root.bridge)
+        // Engaging is idempotent: if a direct override already exists, re-seeding
+        // from the resolved chain would discard the user's diverged edits. Only
+        // seed when there is no override yet (a stray re-fire of onToggleClicked
+        // with checked === true must not clobber the current chain).
+        if (root.bridge && !root._hasOverride)
             root.bridge.setChain(root.surfacePath, root.bridge.chainAt(root.surfacePath));
     }
 

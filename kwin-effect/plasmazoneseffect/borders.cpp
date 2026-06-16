@@ -297,34 +297,13 @@ bool PlasmaZonesEffect::isWindowMarkedSnapped(const QString& windowId) const
     return m_snapHandler->isTiledWindow(windowId);
 }
 
-const PhosphorCompositor::BorderState* PlasmaZonesEffect::resolveBorderStateFor(const QString& windowId) const
-{
-    // Autotile takes precedence; a window can transiently appear in both the
-    // autotile and snap border sets during a mode switch (the call sites guard
-    // against steady-state double-tracking via isAutotileScreen, but the
-    // transition window is real), and resolving autotile-first is the
-    // authoritative tie-break — this ordering is load-bearing, not cosmetic.
-    const BorderState& autotile = m_autotileHandler->borderState();
-    if (AutotileStateHelpers::shouldShowBorderForWindow(autotile, windowId)) {
-        return &autotile;
-    }
-    if (m_snapHandler->shouldShowBorderForWindow(windowId)) {
-        return &m_snapHandler->borderState();
-    }
-    return nullptr;
-}
-
 QString PlasmaZonesEffect::resolveSurfacePathFor(const QString& windowId) const
 {
-    // MEMBERSHIP-only resolution — IGNORES the owning mode's legacy showBorder
-    // gate so the resolved profile's effectiveChain() (an empty chain = no
-    // decoration) is the sole render gate (see updateWindowBorder). isTiledWindow
-    // tests bucket membership without the
-    // showBorder coupling shouldShowBorderForWindow adds, so membership and the
-    // show gate are cleanly separated WITHOUT any phosphor-compositor lib change
-    // (both predicates already exist). Same autotile-first precedence as
-    // resolveBorderStateFor; falls back to window.floating for an unmanaged
-    // window (a per-window rule may still force a border there).
+    // MEMBERSHIP-only resolution: isTiledWindow tests bucket membership, and the
+    // resolved profile's effectiveChain() (an empty chain = no decoration) is the
+    // sole render gate (see updateWindowBorder) — there is no separate show-border
+    // gate. Autotile-first precedence; falls back to window.floating for an
+    // unmanaged window (a per-window rule may still force a border there).
     if (AutotileStateHelpers::isTiledWindow(m_autotileHandler->borderState(), windowId)) {
         return QStringLiteral("window.tiled");
     }
@@ -338,34 +317,43 @@ void PlasmaZonesEffect::seedDecorationTreeBaseline()
 {
     // Mirror the daemon's ConfigDefaults::decorationProfileTree() in the NEW
     // shape: borders + title-bar hiding are WINDOW-only, so the BASELINE is
-    // empty/neutral (daemon surfaces inherit no decoration) and the border
-    // default lives on the "window" node. A single "border" pack in the window
-    // chain, the shared DecorationDefaults hide-titlebar constant, and the
-    // border APPEARANCE carried as the "border" pack's PARAMETERS (not host
-    // decoration fields) so the effect's pre-fetch rendering can't drift from
-    // what the daemon would persist. Border width / corner radius come from the
-    // SHARED DecorationDefaults; the active/inactive colours seed the border
-    // pack's own metadata defaults as #AARRGGBB. The daemon's real fetch
-    // overwrites this whole tree (with the system-resolved colours when
-    // useSystemAccent is on), exactly as the old pre-fetch tree was overwritten
-    // before the async load landed; live system-accent resolution is a
-    // follow-up — useSystemAccent stays a declared param consumed later, not
-    // resolved here.
+    // empty/neutral (daemon surfaces inherit no decoration) and the window
+    // default lives on the "window" node. The pack chain is the SOLE border
+    // on/off gate (the legacy per-mode ShowBorder gate is retired), so the
+    // window chain mirrors DecorationDefaults::ShowBorder: false (the default)
+    // -> engaged-but-EMPTY chain (no border, matching the legacy no-border
+    // default); true -> a single "border" pack plus the border APPEARANCE
+    // carried as that pack's PARAMETERS (not host decoration fields). Border
+    // width / corner radius come from the SHARED DecorationDefaults (so they
+    // match the daemon exactly); the active/inactive colours are a TRANSIENT
+    // placeholder seeded from the border pack's OWN metadata defaults as
+    // #AARRGGBB. The daemon's ConfigDefaults uses ZoneDefaults-derived colours
+    // instead, so these placeholder colours may differ from the daemon's until
+    // the daemon's real fetch overwrites this whole tree (with the
+    // system-resolved colours when useSystemAccent is on) — the same brief
+    // pre-fetch transient the old tree had. hide-titlebar is independent of the
+    // border gate and is always engaged from its own default. The effect can't
+    // reach the daemon's GPL/ZoneDefaults colour source, hence the pack-default
+    // placeholder; live system-accent resolution is consumed daemon-side.
     PhosphorSurfaceShaders::DecorationProfile baseline; // empty/neutral
 
     PhosphorSurfaceShaders::DecorationProfile window;
-    window.chain = QStringList{QStringLiteral("border")};
-    window.hideTitlebar = PhosphorCompositor::DecorationDefaults::HideTitleBars;
-
-    QVariantMap borderParams;
-    borderParams.insert(QStringLiteral("borderWidth"), PhosphorCompositor::DecorationDefaults::BorderWidth);
-    borderParams.insert(QStringLiteral("cornerRadius"), PhosphorCompositor::DecorationDefaults::BorderRadius);
-    borderParams.insert(QStringLiteral("useSystemAccent"), true);
-    borderParams.insert(QStringLiteral("activeColor"), QColor(QStringLiteral("#ff3daee9")).name(QColor::HexArgb));
-    borderParams.insert(QStringLiteral("inactiveColor"), QColor(QStringLiteral("#ff5c6370")).name(QColor::HexArgb));
-
     QVariantMap params;
-    params.insert(QStringLiteral("border"), borderParams);
+    if (PhosphorCompositor::DecorationDefaults::ShowBorder) {
+        window.chain = QStringList{QStringLiteral("border")};
+
+        QVariantMap borderParams;
+        borderParams.insert(QStringLiteral("borderWidth"), PhosphorCompositor::DecorationDefaults::BorderWidth);
+        borderParams.insert(QStringLiteral("cornerRadius"), PhosphorCompositor::DecorationDefaults::BorderRadius);
+        borderParams.insert(QStringLiteral("useSystemAccent"), true);
+        borderParams.insert(QStringLiteral("activeColor"), QColor(QStringLiteral("#ff3daee9")).name(QColor::HexArgb));
+        borderParams.insert(QStringLiteral("inactiveColor"), QColor(QStringLiteral("#ff5c6370")).name(QColor::HexArgb));
+        params.insert(QStringLiteral("border"), borderParams);
+    } else {
+        // ShowBorder default false: engaged-but-empty chain = no border.
+        window.chain = QStringList{};
+    }
+    window.hideTitlebar = PhosphorCompositor::DecorationDefaults::HideTitleBars;
     window.parameters = params;
 
     PhosphorSurfaceShaders::DecorationProfileTree tree;
@@ -446,12 +434,10 @@ void PlasmaZonesEffect::reconcileBorderShader(const QString& windowId, KWin::Eff
         redirect(w);
         setShader(w, redirectShader);
         it->shaderApplied = true;
-    } else if (it != m_windowBorders.end() && it->shaderApplied) {
-        // Border removed but we still own the slot and no transition raced in.
-        setShader(w, nullptr);
-        unredirect(w);
-        it->shaderApplied = false;
     }
+    // No teardown branch here: !wantsBorder means there is no WindowBorder entry
+    // to act on (wantsBorder IS `it != end()`), and border removal always routes
+    // through removeWindowBorder, which clears the shader and unredirects.
 }
 
 void PlasmaZonesEffect::pushBorderUniforms(KWin::EffectWindow* w, const CompiledSurfacePack& pack, qreal scale)
@@ -561,7 +547,8 @@ void PlasmaZonesEffect::drawWindow(const KWin::RenderTarget& renderTarget, const
     int boundChannels = 0; // # of iChannel units we bound (for post-draw cleanup)
     constexpr int kSurfaceChannelBaseUnit = 3 + PhosphorAnimationShaders::AnimationShaderContract::kMaxUserTextureSlots;
     if (!m_capturingSnapshot && !m_windowBorders.isEmpty() && !m_shaderManager.findTransition(w)) {
-        const auto bit = m_windowBorders.constFind(getWindowId(w));
+        const QString wid = getWindowId(w);
+        const auto bit = m_windowBorders.constFind(wid);
         if (bit != m_windowBorders.constEnd() && bit->shaderApplied && bit->chain.size() > 1) {
             // MULTI-PACK present: the whole chain was already composited into a
             // per-window FBO by paintWindow (renderSurfaceChainComposite). Bind the
@@ -570,7 +557,7 @@ void PlasmaZonesEffect::drawWindow(const KWin::RenderTarget& renderTarget, const
             // setShader one from reconcileBorderShader) for its blit, so the
             // uniform persists; the texture stays bound until the post-draw cleanup.
             KWin::GLShader* const present = surfacePresentShader();
-            const auto stateIt = m_surfaceMultipass.find(getWindowId(w));
+            const auto stateIt = m_surfaceMultipass.find(wid);
             if (present && stateIt != m_surfaceMultipass.end()
                 && stateIt->second.compositeTex[stateIt->second.finalSlot]) {
                 const int unit = kSurfaceChannelBaseUnit;
@@ -586,7 +573,7 @@ void PlasmaZonesEffect::drawWindow(const KWin::RenderTarget& renderTarget, const
         } else if (bit != m_windowBorders.constEnd() && bit->shaderApplied) {
             // Per-window resolved base pack — replaces the old single global
             // m_borderShader. nullptr → compile failed/latched (render nothing).
-            CompiledSurfacePack* const pack = compiledPackForWindow(getWindowId(w));
+            CompiledSurfacePack* const pack = compiledPackForWindow(wid);
             if (pack) {
                 // Multipass buffer outputs are rendered in paintWindow
                 // (renderSurfaceBufferPasses), NOT here. That render re-enters the
@@ -596,7 +583,7 @@ void PlasmaZonesEffect::drawWindow(const KWin::RenderTarget& renderTarget, const
                 // corrupting it and crashing the OffscreenEffect::drawWindow below.
                 // paintWindow runs the capture on a fresh iterator; here we only bind
                 // the ready per-window buffer textures as iChannels.
-                const auto stateIt = m_surfaceMultipass.find(getWindowId(w));
+                const auto stateIt = m_surfaceMultipass.find(wid);
                 const bool channelsReady = !pack->bufferPasses.empty() && stateIt != m_surfaceMultipass.end()
                     && !stateIt->second.bufferTex.empty();
 

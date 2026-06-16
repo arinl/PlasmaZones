@@ -208,24 +208,11 @@ public:
     virtual QVariantMap autotilePerAlgorithmSettings() const = 0;
     virtual void setAutotilePerAlgorithmSettings(const QVariantMap& settings) = 0;
 
-    // Global surface-shader selection — ONE pack for all decorated windows
-    // (simpler than the per-event animation-shader model). The selected
-    // pack id plus a per-pack parameter override map (paramId -> value).
-    // Superseded by the per-surface decorationProfileTree below for window
-    // decoration, but retained on the interface (consumed by the D-Bus
-    // settings adaptor) so consumers depend on ISettings, not the concrete
-    // Settings, letting unit tests stub it. Mirrors autotilePerAlgorithmSettings
-    // above.
-    virtual QString surfaceShaderEffectId() const = 0;
-    virtual void setSurfaceShaderEffectId(const QString& effectId) = 0;
-    virtual QVariantMap surfaceShaderParameters() const = 0;
-    virtual void setSurfaceShaderParameters(const QVariantMap& parameters) = 0;
-
     // Hierarchical per-surface decoration tree — a DecorationProfile (surface
     // shader-pack chain + border/titlebar appearance) keyed on a dot-path
-    // surface namespace, layered alongside the global surfaceShaderEffectId
-    // above. Mirrors the animation shaderProfileTree pair (which lives on
-    // IAnimationSettings): the typed getter returns the parsed tree, the
+    // surface namespace. Mirrors the animation shaderProfileTree pair (which
+    // lives on IAnimationSettings): the typed getter returns the parsed tree,
+    // the
     // JSON-string facade routes through it for the Q_PROPERTY meta-object
     // dirty-tracking loop. Lives on the interface so page controllers and the
     // settings adaptor depend on ISettings, not the concrete Settings.
@@ -552,10 +539,6 @@ Q_SIGNALS:
     void autotileSplitRatioStepChanged();
     void autotileMasterCountChanged();
     void autotilePerAlgorithmSettingsChanged();
-    // Global surface-shader selection (see surfaceShaderEffectId /
-    // surfaceShaderParameters above).
-    void surfaceShaderEffectIdChanged();
-    void surfaceShaderParametersChanged();
     void decorationProfileTreeChanged();
     void autotileInnerGapChanged();
     void autotileOuterGapChanged();

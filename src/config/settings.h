@@ -287,12 +287,6 @@ public:
     Q_PROPERTY(bool autotileDragInsertToggle READ autotileDragInsertToggle WRITE setAutotileDragInsertToggle NOTIFY
                    autotileDragInsertToggleChanged)
 
-    // Surface Settings (global — one surface-shader pack for all decorated windows)
-    Q_PROPERTY(QString surfaceShaderEffectId READ surfaceShaderEffectId WRITE setSurfaceShaderEffectId NOTIFY
-                   surfaceShaderEffectIdChanged)
-    Q_PROPERTY(QVariantMap surfaceShaderParameters READ surfaceShaderParameters WRITE setSurfaceShaderParameters NOTIFY
-                   surfaceShaderParametersChanged)
-
     // Animation Settings (applies to both snapping and autotiling geometry changes)
     Q_PROPERTY(bool animationsEnabled READ animationsEnabled WRITE setAnimationsEnabled NOTIFY animationsEnabledChanged)
     Q_PROPERTY(int animationDuration READ animationDuration WRITE setAnimationDuration NOTIFY animationDurationChanged)
@@ -860,16 +854,6 @@ public:
     QString autotileRetileShortcut() const;
     void setAutotileRetileShortcut(const QString& shortcut);
 
-    // Surface Settings — global (one surface-shader pack for all decorated
-    // windows). PhosphorConfig::Store-backed (see settingsschema.cpp). Also on
-    // the ISettings interface so the D-Bus settings adaptor depends on ISettings
-    // (not the concrete Settings); the kwin-effect reads them by Q_PROPERTY name
-    // over D-Bus and the settings UI binds the same names.
-    QString surfaceShaderEffectId() const override;
-    void setSurfaceShaderEffectId(const QString& effectId) override;
-    QVariantMap surfaceShaderParameters() const override;
-    void setSurfaceShaderParameters(const QVariantMap& parameters) override;
-
     // Animation Settings (applies to both snapping and autotiling geometry
     // changes) — backed by PhosphorConfig::Store (see settingsschema.cpp).
     // Phase 4 sub-commit 6: storage format migrated to a single Profile
@@ -1179,11 +1163,6 @@ Q_SIGNALS:
     /// per-field surface get re-triggered through the individual
     /// signals per the existing NOTIFY wiring.
     void animationProfileChanged();
-
-    // Surface-shader selection NOTIFY signals (surfaceShaderEffectIdChanged /
-    // surfaceShaderParametersChanged) live on ISettings so consumers (the D-Bus
-    // settings adaptor) depend on the interface; they are inherited here and
-    // emitted unqualified from the setters in settings.cpp.
 
     // NOTE: do not redeclare signals already on ISettings here.
     // Re-declaring a base-class Q_SIGNAL produces a second moc index

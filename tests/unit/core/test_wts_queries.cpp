@@ -481,11 +481,6 @@ private Q_SLOTS:
         QVERIFY(m_service->isWindowFloating(windowIdNew));
     }
 
-    // testPreSnapGeometry_stableIdFallback removed: the per-engine unmanaged-geometry
-    // store was collapsed into the unified WindowPlacementStore. The appId-fallback
-    // lookup for float-back geometry is now exercised by the WindowPlacementStore
-    // peek/take appId-FIFO tests.
-
 private:
     std::unique_ptr<IsolatedConfigGuard> m_guard;
     PhosphorZones::LayoutRegistry* m_layoutManager = nullptr;

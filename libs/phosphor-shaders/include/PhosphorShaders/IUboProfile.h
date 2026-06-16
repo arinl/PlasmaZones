@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <PhosphorShaders/phosphorshaders_export.h>
+
 #include <array>
 #include <vector>
 
@@ -116,7 +118,7 @@ struct UboFrameState
 ///
 /// Implementations hold their concrete UBO POD struct and expose its bytes via
 /// data()/mutableData() so the node can drive updateDynamicBuffer directly.
-class IUboProfile
+class PHOSPHORSHADERS_EXPORT IUboProfile
 {
 public:
     virtual ~IUboProfile() = default;

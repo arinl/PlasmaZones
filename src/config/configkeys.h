@@ -114,10 +114,12 @@ public:
     P_CONFIG_GROUP(tilingAppearanceBordersGroup, "Tiling.Appearance.Borders")
     P_CONFIG_GROUP(tilingGapsGroup, "Tiling.Gaps")
 
-    // Surface — global surface-shader selection (one pack for all decorated
-    // windows). A flat top-level group rather than a per-mode sub-group of
-    // Tiling/Snapping because the surface pack is product-wide, not bound to a
-    // tiling/snapping appearance axis.
+    // Surface — per-surface decoration tree (DecorationProfileTree: shader-pack
+    // chain + border/titlebar appearance, keyed on a dot-path surface
+    // namespace). A flat top-level group rather than a per-mode sub-group of
+    // Tiling/Snapping because decoration is product-wide, not bound to a
+    // tiling/snapping appearance axis. (ShaderEffectId survives only as a
+    // migration-read legacy source key, not a live setting.)
     P_CONFIG_GROUP(surfaceGroup, "Surface")
 
     // Parent groups (for purge enumeration — covers all sub-groups)
@@ -369,11 +371,13 @@ public:
     // Config Keys — Surface
     // ═══════════════════════════════════════════════════════════════════════════
 
+    // Legacy v3 source key read by the v3→v4 seed migration
+    // (seedDecorationProfileTree) to carry a user's old global pack choice into
+    // the decoration tree. Not a live setting — superseded by the decoration
+    // tree below.
     P_CONFIG_KEY(surfaceShaderEffectIdKey, "ShaderEffectId")
-    P_CONFIG_KEY(surfaceShaderParametersKey, "ShaderParameters")
     // DecorationProfileTree JSON blob — hierarchical per-surface decoration
-    // (shader-pack chain + border/titlebar appearance), layered alongside the
-    // global surface-shader pack selection above. Mirrors the animation
+    // (shader-pack chain + border/titlebar appearance). Mirrors the animation
     // ShaderProfileTree blob under Animations; persisted as a nested JSON
     // object under the Surface group.
     P_CONFIG_KEY(surfaceDecorationTreeKey, "DecorationProfileTree")

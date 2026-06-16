@@ -69,7 +69,8 @@ private:
         QDir().mkpath(QFileInfo(path).absolutePath());
         QFile f(path);
         QVERIFY(f.open(QIODevice::WriteOnly));
-        f.write(QJsonDocument(obj).toJson());
+        const QByteArray bytes = QJsonDocument(obj).toJson();
+        QCOMPARE(f.write(bytes), static_cast<qint64>(bytes.size()));
     }
 
     QJsonObject readJson(const QString& path)
@@ -553,8 +554,6 @@ private Q_SLOTS:
             return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
         }();
         QVERIFY(!firstRun.isEmpty());
-        const int firstCount =
-            QJsonDocument::fromJson(firstRun).object().value(QStringLiteral("rules")).toArray().size();
 
         // The process-level migration guard would normally short-circuit;
         // reset it so the second call re-runs the full logic against the
@@ -569,12 +568,9 @@ private Q_SLOTS:
         // The `windowRulesAlreadyConverted` probe loads windowrules.json as a
         // v4 WindowRuleSet; on the second run it succeeds, so finalize takes
         // the already-converted branch and only retries the idempotent
-        // cleanup steps instead of rebuilding — windowrules.json is
-        // byte-identical, the rule count is unchanged.
+        // cleanup steps instead of rebuilding. Byte-identity is the strongest
+        // possible idempotency assertion (it subsumes rule-count equality).
         QCOMPARE(secondRun, firstRun);
-        const int secondCount =
-            QJsonDocument::fromJson(secondRun).object().value(QStringLiteral("rules")).toArray().size();
-        QCOMPARE(secondCount, firstCount);
     }
 
     // ─── No-assignments fixture ───────────────────────────────────────────
@@ -1810,9 +1806,11 @@ private:
         return root;
     }
 
-    /// Animation-exclude rules are the only ExcludeAnimations-action
-    /// shape the migration produces, so a simple "rules whose actions
-    /// contain excludeAnimations" filter cleanly isolates them.
+    /// Animation-exclude rules are the only ExcludeAnimations-action shape the
+    /// migration produces, with exactly one action, so filtering for the exact
+    /// single-action list {excludeAnimations} cleanly isolates them. (Exact
+    /// match, not "contains": if the migration ever emits a second action
+    /// alongside it, this filter must be revisited rather than silently passing.)
     QList<QJsonObject> animationExclusionRules(const QJsonArray& rules)
     {
         QList<QJsonObject> out;

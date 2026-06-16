@@ -15,9 +15,15 @@
  * groupObjectAtPath. The tests assert:
  *   - a config with no customised border/shader keys writes no
  *     Surface.DecorationProfileTree (the read-time default suffices),
+ *   - the pack chain is the sole border on/off gate, honouring the legacy
+ *     ShowBorder: an explicit (or, since ShowBorder defaults to false, an unset)
+ *     OFF seeds an engaged-but-empty chain (no border), while ON engages the
+ *     pack,
  *   - customised border width/radius/colours/hide-titlebar seed a `window`
  *     override under parameters["border"] with the exact pack param ids, on an
  *     empty baseline,
+ *   - the border-appearance params are preserved even with the chain gated off,
+ *     so a later re-enable restores the user's width/colours,
  *   - out-of-range width/radius are clamped to the same bounds the live read
  *     path enforces,
  *   - a corrupt colour string falls back to the default colour,
@@ -175,6 +181,7 @@ private Q_SLOTS:
         Inputs in;
         in.width = 99999;
         in.radius = -50;
+        in.showBorder = true;
         in.shaderEffectId = CD::surfaceShaderEffectId();
         QJsonObject root = buildRoot(in);
 
@@ -188,6 +195,7 @@ private Q_SLOTS:
     void testInvalidColor_fallsBackToDefault()
     {
         Inputs in;
+        in.showBorder = true;
         in.active = QStringLiteral("totally-not-a-colour");
         in.inactive = QStringLiteral("#ff445566");
         QJsonObject root = buildRoot(in);
@@ -206,6 +214,7 @@ private Q_SLOTS:
     {
         Inputs in;
         in.width = 6;
+        in.showBorder = true;
         in.shaderEffectId = CD::surfaceShaderEffectId();
         QJsonObject root = buildRoot(in);
 
@@ -222,6 +231,7 @@ private Q_SLOTS:
     {
         Inputs in;
         in.width = 6; // border-appearance customisation present...
+        in.showBorder = true; // ...border is ON so the chain engages the pack...
         in.shaderEffectId = QStringLiteral("glow"); // ...but a non-border pack is selected.
         QJsonObject root = buildRoot(in);
 
@@ -235,10 +245,12 @@ private Q_SLOTS:
 
     void testPartialCustom_omittedKeysUseDefaults()
     {
-        // Only Width is customised; every other field is absent and must fall
-        // back to its ConfigDefaults value (not to a zero/empty value).
+        // Width + ShowBorder are customised (border ON); every other field is
+        // absent and must fall back to its ConfigDefaults value (not to a
+        // zero/empty value).
         Inputs in;
         in.width = 6;
+        in.showBorder = true;
         QJsonObject root = buildRoot(in);
 
         ConfigMigration::seedDecorationProfileTree(root);
@@ -263,9 +275,10 @@ private Q_SLOTS:
     void testEmptyShaderId_fallsBackToBorder()
     {
         // An engaged-but-empty ShaderEffectId must resolve to the default pack id
-        // rather than seeding an empty chain.
+        // rather than seeding an empty chain (border is ON here).
         Inputs in;
         in.width = 6;
+        in.showBorder = true;
         in.shaderEffectId = QString();
         QJsonObject root = buildRoot(in);
 
@@ -275,6 +288,50 @@ private Q_SLOTS:
         QCOMPARE(window.effectiveChain(), QStringList{CD::surfaceShaderEffectId()});
         // The resolved chain IS the border pack, so its params are filed.
         QVERIFY(window.effectiveParameters().contains(CD::surfaceShaderEffectId()));
+    }
+
+    void testShowBorderExplicitFalse_emptyChainButParamsPreserved()
+    {
+        // The pack chain is the sole border gate: a v3 user who explicitly
+        // turned the border OFF must NOT gain a border on upgrade. The chain is
+        // engaged-but-empty, yet the (customised) appearance params survive so a
+        // later re-enable restores width/colours instead of pack defaults.
+        Inputs in;
+        in.width = 6;
+        in.showBorder = false;
+        in.active = QStringLiteral("#ff112233");
+        QJsonObject root = buildRoot(in);
+
+        ConfigMigration::seedDecorationProfileTree(root);
+        QVERIFY(hasTreeKey(root));
+
+        const DPS::DecorationProfile window = treeFromRoot(root).directOverride(QStringLiteral("window"));
+        QVERIFY2(window.effectiveChain().isEmpty(), "explicit ShowBorder=false must seed an empty chain (no border)");
+
+        const QVariantMap params = borderParamsOf(window);
+        QCOMPARE(params.value(QStringLiteral("borderWidth")).toInt(), 6);
+        QCOMPARE(params.value(QStringLiteral("activeColor")).toString(),
+                 QColor(QStringLiteral("#ff112233")).name(QColor::HexArgb));
+    }
+
+    void testShowBorderUnset_defaultsOff_emptyChain()
+    {
+        // ShowBorder defaults to false, so a config that customised some other
+        // border field but never set ShowBorder keeps the legacy no-border
+        // behaviour: a tree IS seeded (a field was customised) but with an empty
+        // chain. (Guards against the regression where any customisation forced a
+        // border on.)
+        Inputs in;
+        in.width = 6; // a customised field triggers the seed...
+        // ...but ShowBorder is left unset.
+        QJsonObject root = buildRoot(in);
+
+        ConfigMigration::seedDecorationProfileTree(root);
+        QVERIFY(hasTreeKey(root));
+
+        const DPS::DecorationProfile window = treeFromRoot(root).directOverride(QStringLiteral("window"));
+        QVERIFY2(window.effectiveChain().isEmpty(),
+                 "unset ShowBorder (default false) must seed an empty chain (no border)");
     }
 };
 

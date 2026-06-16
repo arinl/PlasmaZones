@@ -569,10 +569,13 @@ QVariantMap SurfaceShaderRegistry::translateSurfaceParams(const SurfaceShaderEff
         if (pathOverride != friendlyParams.constEnd()) {
             const QString candidate = pathOverride->toString();
             if (candidate.isEmpty()) {
-                // Empty-string override = explicit clear of the slot.
-                // The pack-default wrap (if any) is intentionally dropped
-                // because wrap is meaningless without a bound texture.
+                // Empty-string override = explicit clear of the slot. Drop the
+                // pack-default wrap too (meaningless without a bound texture),
+                // matching the both-or-neither coherence rule the rejection
+                // branches below apply; the empty path also skips emit at the
+                // path.isEmpty() guard.
                 path = candidate;
+                wrap.clear();
             } else if (effect.sourceDir.isEmpty()) {
                 // Degenerate case — pack came from an in-memory factory
                 // with no on-disk anchor. There is no sourceDir to bound

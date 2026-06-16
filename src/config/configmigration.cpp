@@ -1773,7 +1773,17 @@ void ConfigMigration::seedDecorationProfileTree(QJsonObject& root)
 
     const QString shaderId = haveShaderId ? surface.value(ConfigDefaults::surfaceShaderEffectIdKey()).toString()
                                           : ConfigDefaults::surfaceShaderEffectId();
-    window.chain = QStringList{shaderId.isEmpty() ? ConfigDefaults::surfaceShaderEffectId() : shaderId};
+    const QString borderPackId = shaderId.isEmpty() ? ConfigDefaults::surfaceShaderEffectId() : shaderId;
+
+    // The pack chain is the SOLE border on/off gate (the legacy ShowBorder gate
+    // is retired). Honour the user's old ShowBorder: an explicit (or defaulted)
+    // OFF seeds an engaged-but-EMPTY chain so the border stays hidden exactly as
+    // in v3; ON engages the pack. ShowBorder defaults to false, so a v3 config
+    // that customised some OTHER border field but never set ShowBorder keeps the
+    // legacy no-border behaviour rather than gaining a border on upgrade.
+    const bool showBorder =
+        haveShowBorder ? borders.value(ConfigDefaults::showBorderKey()).toBool() : ConfigDefaults::autotileShowBorder();
+    window.chain = showBorder ? QStringList{borderPackId} : QStringList{};
 
     window.hideTitlebar = haveHideTitle ? decorations.value(ConfigDefaults::hideTitleBarsKey()).toBool()
                                         : ConfigDefaults::autotileHideTitleBars();
@@ -1812,11 +1822,13 @@ void ConfigMigration::seedDecorationProfileTree(QJsonObject& root)
 
     QVariantMap params;
     // The border params are the BORDER pack's parameters; file them under the
-    // chain's pack id only when that pack IS the border pack. A v4 config that
-    // selected a different surface pack (none shipped before this category
-    // existed, but guard defensively) would otherwise carry a stray param block
-    // keyed to a pack absent from the chain.
-    if (window.chain && window.chain->value(0) == ConfigDefaults::surfaceShaderEffectId()) {
+    // border pack id whenever that is the pack the user's chain resolves to,
+    // INDEPENDENT of the on/off gate above. Preserving them under an
+    // engaged-but-empty (border OFF) chain means a later re-enable restores the
+    // user's width/colours instead of snapping back to pack defaults. A v4
+    // config that selected a different surface pack (none shipped before this
+    // category existed, but guard defensively) carries no stray border block.
+    if (borderPackId == ConfigDefaults::surfaceShaderEffectId()) {
         params.insert(ConfigDefaults::surfaceShaderEffectId(), borderParams);
     }
     window.parameters = params;

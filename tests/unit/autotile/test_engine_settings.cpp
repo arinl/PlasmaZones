@@ -302,10 +302,10 @@ private Q_SLOTS:
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Debounce: rapid changes coalesce
+    // Direct config mutation is silent; explicit retile drives placement
     // ═══════════════════════════════════════════════════════════════════════════
 
-    void testDebounceCoalescesRapidChanges()
+    void testDirectConfigMutationIsSilent_explicitRetileDrivesPlacement()
     {
         AutotileEngine engine(nullptr, nullptr, nullptr, PlasmaZones::TestHelpers::testRegistry());
         const QString screen = QStringLiteral("eDP-1");
@@ -322,17 +322,15 @@ private Q_SLOTS:
         engine.config()->innerGap = 8;
         engine.config()->outerGap = 12;
 
-        // The four rapid direct config mutations write straight to config(),
-        // bypassing the signal path, so none of them emits placementChanged.
+        // Direct writes to config() mutate the struct in place, bypassing the
+        // settings-driven retile path entirely, so none of them emits
+        // placementChanged on their own.
         QCOMPARE(tilingSpy.count(), 0);
 
         engine.retile();
         QCoreApplication::processEvents();
 
-        // The explicit retile() IS what drives placement — proving the
-        // distinction the test name implies: rapid direct mutations are
-        // coalesced (zero emissions of their own) and only the deliberate
-        // retile reaches the renderer.
+        // Only the deliberate retile() reaches the renderer.
         QVERIFY2(tilingSpy.count() > 0, "explicit retile() must drive placementChanged");
     }
 

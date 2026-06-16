@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <iterator>
 
 namespace PhosphorSurfaceShaders {
 
@@ -57,19 +58,22 @@ void SurfaceUniformProfile::fill(const PhosphorShaders::UboFrameState& state)
     m_u._pad0[0] = 0.0f;
     m_u._pad0[1] = 0.0f;
 
-    for (int i = 0; i < 8; ++i) {
+    // Loop bounds derive from the destination array extents (pinned by the
+    // SurfaceUniforms static_asserts) so they can't silently under-copy if the
+    // std140 layout ever grows.
+    for (std::size_t i = 0; i < std::size(m_u.customParams); ++i) {
         m_u.customParams[i][0] = state.customParams[i][0];
         m_u.customParams[i][1] = state.customParams[i][1];
         m_u.customParams[i][2] = state.customParams[i][2];
         m_u.customParams[i][3] = state.customParams[i][3];
     }
-    for (int i = 0; i < 16; ++i) {
+    for (std::size_t i = 0; i < std::size(m_u.customColors); ++i) {
         m_u.customColors[i][0] = state.customColors[i][0];
         m_u.customColors[i][1] = state.customColors[i][1];
         m_u.customColors[i][2] = state.customColors[i][2];
         m_u.customColors[i][3] = state.customColors[i][3];
     }
-    for (int i = 0; i < 4; ++i) {
+    for (std::size_t i = 0; i < std::size(m_u.iChannelResolution); ++i) {
         m_u.iChannelResolution[i][0] = state.channelResolution[i][0];
         m_u.iChannelResolution[i][1] = state.channelResolution[i][1];
         m_u.iChannelResolution[i][2] = 0.0f;

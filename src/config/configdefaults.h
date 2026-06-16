@@ -805,10 +805,10 @@ public:
     // ═══════════════════════════════════════════════════════════════════════════
     // Surface shader Settings
     //
-    // Global (one pack for all decorated windows): the selected surface shader
-    // pack id and a per-pack parameter override map (paramId -> value). The
-    // group/key accessors (surfaceGroup / surfaceShaderEffectIdKey /
-    // surfaceShaderParametersKey) are inherited from ConfigKeys — no forwarding
+    // The canonical default surface shader pack id ("border"). Shared by the
+    // default decorationProfileTree() below and the v3→v4 seed migration as the
+    // border pack's id; the group/key accessors (surfaceGroup /
+    // surfaceShaderEffectIdKey) are inherited from ConfigKeys — no forwarding
     // accessors needed here (same as every other group: ConfigDefaults derives
     // from ConfigKeys).
     // ═══════════════════════════════════════════════════════════════════════════
@@ -816,10 +816,6 @@ public:
     static QString surfaceShaderEffectId()
     {
         return QStringLiteral("border");
-    }
-    static QVariantMap surfaceShaderParameters()
-    {
-        return {};
     }
 
     /// Build the `border` pack's parameter map from the given values. SINGLE
@@ -847,22 +843,34 @@ public:
     ///
     /// Borders + title-bar hiding only make sense for WINDOWS, not daemon
     /// surfaces (osd / popup). So the BASELINE is empty/neutral (no chain, no
-    /// parameters, no hide-titlebar engaged) and the border default lives on the
-    /// `window` node instead: window.tiled/snapped/floating inherit `window` ->
-    /// border, while osd/popup inherit the empty baseline -> no decoration by
-    /// default. The `window` override carries a single `border` pack plus its
-    /// PARAMETERS (the pack reads
+    /// parameters, no hide-titlebar engaged) and the window default lives on the
+    /// `window` node instead: window.tiled/snapped/floating inherit `window`,
+    /// while osd/popup inherit the empty baseline -> no decoration.
+    ///
+    /// The decoration tree's pack chain is the SOLE border on/off gate (the
+    /// legacy per-mode ShowBorder gate is retired). So the default `window`
+    /// chain mirrors `DecorationDefaults::ShowBorder`: when it is false (the
+    /// default) the window chain is engaged-but-EMPTY (no border drawn, matching
+    /// the legacy no-border default), and only when ShowBorder is true does the
+    /// chain carry the `border` pack plus its PARAMETERS (the pack reads
     /// p_borderWidth/p_cornerRadius/p_activeColor/p_inactiveColor/
-    /// p_useSystemAccent from these); param ids match
-    /// data/surface/border/metadata.json exactly.
+    /// p_useSystemAccent from these; param ids match
+    /// data/surface/border/metadata.json exactly). hide-titlebar is independent
+    /// of the border gate and is always engaged from its own default.
     static ::PhosphorSurfaceShaders::DecorationProfileTree decorationProfileTree()
     {
         // Empty baseline: daemon surfaces inherit no window decoration.
         ::PhosphorSurfaceShaders::DecorationProfile baseline;
 
-        // Window override: the canonical border default lives here.
+        // Window override: the canonical window default lives here. The chain is
+        // gated on ShowBorder (false default -> engaged-but-empty = no border),
+        // but the border params are filed REGARDLESS of the gate — matching
+        // ConfigMigration::seedDecorationProfileTree — so toggling the border on
+        // later restores these canonical defaults instead of falling back to the
+        // pack's metadata defaults.
         ::PhosphorSurfaceShaders::DecorationProfile window;
-        window.chain = QStringList{surfaceShaderEffectId()};
+        window.chain =
+            ::PhosphorCompositor::DecorationDefaults::ShowBorder ? QStringList{surfaceShaderEffectId()} : QStringList{};
         window.hideTitlebar = ::PhosphorCompositor::DecorationDefaults::HideTitleBars;
 
         QVariantMap params;

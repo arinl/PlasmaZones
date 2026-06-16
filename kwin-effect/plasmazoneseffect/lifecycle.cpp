@@ -530,11 +530,18 @@ PlasmaZonesEffect::PlasmaZonesEffect()
         if (m_windowIdCache.contains(w)) {
             const QString cachedId = m_windowIdCache.take(w);
             m_windowIdReverse.remove(cachedId);
-            // Free any multipass FBO targets keyed by this window id. Normally
-            // removeWindowBorder (run from slotWindowClosed) already cleared
-            // this; the explicit erase here is defence-in-depth for a window
-            // deleted without a preceding close, keyed by the same composite id
-            // the targets were stored under.
+            // Free the border entry AND its multipass FBO targets keyed by this
+            // window id. Normally removeWindowBorder (run from slotWindowClosed)
+            // already cleared both; the explicit call here is defence-in-depth
+            // for a window deleted without a preceding close. findWindowById
+            // returns null post-delete, so removeWindowBorder's setShader /
+            // unredirect safely no-op and only the map erases run — critically
+            // dropping the m_windowBorders entry too, so a delete-without-close
+            // can't strand it and keep isActive() pinned true for the session.
+            removeWindowBorder(cachedId);
+            // Belt-and-suspenders for the not-expected case of a multipass entry
+            // without a border entry (removeWindowBorder's no-border early-return
+            // would otherwise skip the FBO cleanup).
             m_surfaceMultipass.erase(cachedId);
             // Mirror the m_pendingFrameGeometry cleanup that
             // slotWindowClosed runs (window_lifecycle.cpp). A
@@ -788,9 +795,9 @@ PlasmaZonesEffect::PlasmaZonesEffect()
         // windowDecorationRestored per window, and the rebuild-on-restore
         // handler would otherwise recreate a border item for every still-
         // tracked window only for clearAllBorders() to destroy it moments
-        // later. With tracking cleared, resolveBorderStateFor returns null
-        // for mode-tracked windows during the restore burst and the handler
-        // drops their items. Windows matched by a still-live SetBorder rule
+        // later. With tracking cleared, resolveSurfacePathFor resolves
+        // mode-tracked windows to window.floating during the restore burst and
+        // the handler drops their items. Windows matched by a still-live SetBorder rule
         // (the rule sets deliberately survive daemon loss, see below) can
         // still get an item recreated and immediately torn down by
         // clearAllBorders() — bounded, invisible churn that is cheaper than

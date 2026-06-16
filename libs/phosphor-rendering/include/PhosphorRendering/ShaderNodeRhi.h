@@ -78,8 +78,9 @@ constexpr bool isConsumerBinding(int binding) noexcept
  * @brief QSGRenderNode for fullscreen-quad shader rendering via Qt RHI (Vulkan / OpenGL)
  *
  * Generalized render node extracted from Phosphor's ZoneShaderNodeRhi.
- * Manages a Shadertoy-compatible UBO (BaseUniforms), multipass buffer system,
- * texture bindings (audio, user, wallpaper, depth), and shader baking.
+ * Manages a Shadertoy-compatible UBO (a profile-supplied layout, BaseUniforms
+ * by default), multipass buffer system, texture bindings (audio, user,
+ * wallpaper, depth), and shader baking.
  *
  * Application-specific UBO data is appended via IUniformExtension.
  * Application-specific texture bindings use setExtraBinding() / removeExtraBinding().
@@ -120,10 +121,11 @@ public:
     /// @param profile Pluggable UBO profile. The default (nullptr) installs a
     ///                BaseUniformProfile so every existing caller — including
     ///                ZoneShaderNodeRhi's `ShaderNodeRhi(item)` forward — keeps
-    ///                the legacy 672-byte overlay/animation UBO unchanged. A
-    ///                future surface-decoration runtime passes a
-    ///                SurfaceUniformProfile here to reuse the engine with the
-    ///                leaner surface UBO.
+    ///                the legacy overlay/animation UBO (BaseUniforms, currently
+    ///                672 bytes) unchanged. The surface-decoration runtime passes
+    ///                a SurfaceUniformProfile here to reuse the engine with the
+    ///                leaner surface UBO. UBO size is always profile-defined
+    ///                (m_uboProfile->baseSize()), never hard-coded.
     explicit ShaderNodeRhi(QQuickItem* item, std::unique_ptr<PhosphorShaders::IUboProfile> profile = nullptr);
     ~ShaderNodeRhi() override;
 

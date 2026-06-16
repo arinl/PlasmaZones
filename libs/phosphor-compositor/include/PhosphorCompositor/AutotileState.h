@@ -5,7 +5,6 @@
 
 #include <PhosphorCompositor/DecorationDefaults.h>
 
-#include <QColor>
 #include <QHash>
 #include <QPair>
 #include <QRect>
@@ -19,9 +18,10 @@ namespace PhosphorCompositor {
 /**
  * @brief Compositor-agnostic autotile border state
  *
- * Tracks which windows are tile-managed (drives border RENDERING) plus the
- * shared border appearance settings. Title-bar/borderless state lives in
- * the DecorationManager's owner model, not here.
+ * Tracks which windows are tile-managed (drives border RENDERING). Border
+ * APPEARANCE (width / radius / colours / show) is no longer tracked here — it
+ * lives in the per-surface decoration tree (the border pack's parameters);
+ * title-bar/borderless state lives in the DecorationManager's owner model.
  * Per-screen keyed so per-VS retiles can update tracking in isolation
  * without cross-contaminating with windows on sibling virtual screens.
  * Shared across compositor plugins to avoid duplicating state management.
@@ -34,15 +34,10 @@ struct BorderState
     /// retile. Title-bar (borderless) state is NOT tracked here — that is
     /// the DecorationManager's owner model.
     QHash<QString, QSet<QString>> tiledWindowsByScreen;
-    // Defaults shared with the daemon's ConfigDefaults via DecorationDefaults
-    // so the effect's pre-settings-load rendering can't drift from what the
-    // daemon would persist.
+    // Default shared with the daemon's ConfigDefaults via DecorationDefaults so
+    // the effect's pre-settings-load rendering can't drift from what the daemon
+    // would persist.
     bool hideTitleBars = DecorationDefaults::HideTitleBars;
-    bool showBorder = DecorationDefaults::ShowBorder;
-    int width = DecorationDefaults::BorderWidth;
-    int radius = DecorationDefaults::BorderRadius;
-    QColor color;
-    QColor inactiveColor;
 };
 
 /**
@@ -65,11 +60,6 @@ inline bool isTiledWindow(const BorderState& border, const QString& windowId)
         }
     }
     return false;
-}
-
-inline bool shouldShowBorderForWindow(const BorderState& border, const QString& windowId)
-{
-    return border.showBorder && isTiledWindow(border, windowId);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -4,6 +4,7 @@
 #include "daemongeometryresolver.h"
 #include "geometryutils.h"
 #include "isettings.h"
+#include <PhosphorCompositor/DecorationDefaults.h>
 #include <PhosphorEngine/IGeometrySettings.h>
 #include <PhosphorLayoutApi/EdgeGaps.h>
 #include <PhosphorZones/AssignmentEntry.h>
@@ -43,12 +44,14 @@ PhosphorLayout::EdgeGaps DaemonGeometryResolver::resolveOuterGaps(PhosphorZones:
 
 int DaemonGeometryResolver::defaultBorderWidth() const
 {
-    return m_settings ? m_settings->borderWidth() : 2;
+    // Null-settings fallback uses the shared decoration default (the same source
+    // Settings::borderWidth() defaults to) rather than a magic literal.
+    return m_settings ? m_settings->borderWidth() : PhosphorCompositor::DecorationDefaults::BorderWidth;
 }
 
 int DaemonGeometryResolver::defaultBorderRadius() const
 {
-    return m_settings ? m_settings->borderRadius() : 0;
+    return m_settings ? m_settings->borderRadius() : PhosphorCompositor::DecorationDefaults::BorderRadius;
 }
 
 int DaemonGeometryResolver::snapBorderInset() const

@@ -881,10 +881,13 @@ public:
     }
     bool snappingHideTitleBars() const override
     {
-        // Member-backed so the border-inset tests can toggle decorated vs
-        // borderless mode. Defaults to true (distinct from snappingShowBorder's
-        // default) so the D-Bus batch test can still detect a registration swap
-        // between the two adjacent bool keys via value-mirroring.
+        // Member-backed so tests can set explicit decorated-vs-borderless inputs.
+        // (DaemonGeometryResolver::snapBorderInset() does not gate on this — it
+        // returns 0 unconditionally — so the inset tests document the inputs
+        // rather than flip a gate.) Defaults to true (distinct from
+        // snappingShowBorder's default) so the D-Bus batch test can still detect
+        // a registration swap between the two adjacent bool keys via
+        // value-mirroring.
         return m_snappingHideTitleBars;
     }
     void setSnappingHideTitleBars(bool v) override
@@ -984,30 +987,6 @@ public:
             return;
         m_autotilePerAlgorithmSettings = settings;
         Q_EMIT autotilePerAlgorithmSettingsChanged();
-        Q_EMIT settingsChanged();
-    }
-    QString surfaceShaderEffectId() const override
-    {
-        return m_surfaceShaderEffectId;
-    }
-    void setSurfaceShaderEffectId(const QString& effectId) override
-    {
-        if (m_surfaceShaderEffectId == effectId)
-            return;
-        m_surfaceShaderEffectId = effectId;
-        Q_EMIT surfaceShaderEffectIdChanged();
-        Q_EMIT settingsChanged();
-    }
-    QVariantMap surfaceShaderParameters() const override
-    {
-        return m_surfaceShaderParameters;
-    }
-    void setSurfaceShaderParameters(const QVariantMap& parameters) override
-    {
-        if (m_surfaceShaderParameters == parameters)
-            return;
-        m_surfaceShaderParameters = parameters;
-        Q_EMIT surfaceShaderParametersChanged();
         Q_EMIT settingsChanged();
     }
     QString loadColorsFromFile(const QString&) override
@@ -1236,8 +1215,6 @@ private:
     int m_animationMinimumWindowWidth = ConfigDefaults::animationMinimumWindowWidth();
     int m_animationMinimumWindowHeight = ConfigDefaults::animationMinimumWindowHeight();
     QVariantMap m_autotilePerAlgorithmSettings;
-    QString m_surfaceShaderEffectId = ConfigDefaults::surfaceShaderEffectId();
-    QVariantMap m_surfaceShaderParameters = ConfigDefaults::surfaceShaderParameters();
     QString m_editorDuplicateShortcut = ConfigDefaults::editorDuplicateShortcut();
     QString m_editorSplitHorizontalShortcut = ConfigDefaults::editorSplitHorizontalShortcut();
     QString m_editorSplitVerticalShortcut = ConfigDefaults::editorSplitVerticalShortcut();

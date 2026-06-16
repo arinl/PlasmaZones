@@ -19,8 +19,11 @@
 #     generated p_<id> preamble.
 #
 # Mirrors libs/phosphor-animation's shader-pack subsystem; trimmed to the
-# parts a surface shader needs (no QML, no rendering, no surface
-# lifecycle, no multipass).
+# parts a surface shader needs (no QML, no rendering, no surface lifecycle).
+# Multipass IS modelled here as pack metadata (SurfaceShaderEffect's
+# bufferShaderPaths / bufferScale / bufferWrap, used by the glow pack); the
+# buffer-chain composition itself lives in the consumers (kwin-effect /
+# daemon), not this library.
 
 cmake_minimum_required(VERSION 3.16)
 

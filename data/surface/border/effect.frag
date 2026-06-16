@@ -23,6 +23,15 @@ layout(location = 0) out vec4 fragColor;
 void main() {
     vec4 tex = surfaceTexel(vTexCoord);
 
+    // Identity-decoration state: before a host wires real geometry the frame
+    // rect is degenerate (uSurfaceFrameSize == 0). The SDF below would collapse
+    // to "edge everywhere" and paint a border over the whole surface, so pass
+    // the captured content through untouched until a real frame arrives.
+    if (uSurfaceFrameSize.x < 1.0 || uSurfaceFrameSize.y < 1.0) {
+        fragColor = tex;
+        return;
+    }
+
     // Fragment's top-down device pixel; the content rect sits at
     // uSurfaceFrameTopLeft..+uSurfaceFrameSize (device px).
     vec2 p = surfacePixel(vTexCoord);

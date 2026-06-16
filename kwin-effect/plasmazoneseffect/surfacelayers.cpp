@@ -681,7 +681,10 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChainComposite(KWin::EffectWind
             if (pk->uTexture0Loc >= 0) {
                 pk->shader->setUniform(pk->uTexture0Loc, 0);
             }
-            const int n = qMin(static_cast<int>(bufs.size()), 4);
+            // Bind only the buffers step 2a actually rendered (passCount), not
+            // every allocated slot: if bufs ever outnumbers the pack's buffer
+            // passes, the surplus textures are unwritten and must not be sampled.
+            const int n = qMin(static_cast<int>(passCount), 4);
             for (int i = 0; i < n; ++i) {
                 glActiveTexture(GL_TEXTURE1 + i);
                 bufs[i]->bind();
@@ -698,7 +701,7 @@ KWin::GLTexture* PlasmaZonesEffect::renderSurfaceChainComposite(KWin::EffectWind
             pushBorderUniforms(w, *pk, captureScale);
             drawFullscreenQuad();
         }
-        for (int i = 0; i < qMin(static_cast<int>(bufs.size()), 4); ++i) {
+        for (int i = 0; i < qMin(static_cast<int>(passCount), 4); ++i) {
             glActiveTexture(GL_TEXTURE1 + i);
             glBindTexture(GL_TEXTURE_2D, 0);
         }

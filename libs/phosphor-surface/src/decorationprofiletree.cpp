@@ -137,6 +137,9 @@ DecorationProfileTree DecorationProfileTree::fromJson(const QJsonObject& obj)
         const QString path = entry.value(QLatin1String("path")).toString();
         if (path.isEmpty())
             continue;
+        // setOverride de-dups: a malformed file with duplicate entries for the
+        // same path resolves to last-value-wins (keeping the first-seen position),
+        // and the next save() normalises it back to a single entry.
         tree.setOverride(path, DecorationProfile::fromJson(entry.value(QLatin1String("profile")).toObject()));
     }
 

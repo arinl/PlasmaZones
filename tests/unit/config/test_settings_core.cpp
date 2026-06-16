@@ -221,8 +221,11 @@ private Q_SLOTS:
         // Snapped-window appearance (Snapping.Appearance.{Borders,Decorations,Colors}).
         // useSystemBorderColors=false so the explicit colors persist instead of
         // being overwritten by the accent-derived system colors on load.
-        settings.setSnappingShowBorder(false);
-        settings.setSnappingHideTitleBars(false);
+        // showBorder/hideTitleBars set to NON-default (true) so the load-side
+        // getter round-trip below actually distinguishes a written value from the
+        // getter's default (both default to false).
+        settings.setSnappingShowBorder(true);
+        settings.setSnappingHideTitleBars(true);
         settings.setSnappingBorderWidth(4);
         settings.setSnappingBorderRadius(8);
         settings.setSnappingUseSystemBorderColors(false);
@@ -310,14 +313,16 @@ private Q_SLOTS:
         {
             // Snapped-window border decoration (Snapping.Appearance.Borders).
             auto borders = backend->group(ConfigDefaults::snappingAppearanceBordersGroup());
-            QCOMPARE(borders->readBool(ConfigDefaults::showBorderKey(), true), false);
+            // Fallback false (the default) so a missing write is caught by the
+            // expected-true comparison rather than masked by the fallback.
+            QCOMPARE(borders->readBool(ConfigDefaults::showBorderKey(), false), true);
             QCOMPARE(borders->readInt(ConfigDefaults::widthKey(), 0), 4);
             QCOMPARE(borders->readInt(ConfigDefaults::radiusKey(), 0), 8);
         }
         {
             // Snapped-window title-bar decoration (Snapping.Appearance.Decorations).
             auto decorations = backend->group(ConfigDefaults::snappingAppearanceDecorationsGroup());
-            QCOMPARE(decorations->readBool(ConfigDefaults::hideTitleBarsKey(), true), false);
+            QCOMPARE(decorations->readBool(ConfigDefaults::hideTitleBarsKey(), false), true);
         }
         {
             // Snapped-window border colors (Snapping.Appearance.Colors). Read the
@@ -336,8 +341,8 @@ private Q_SLOTS:
             // a getter wired to the wrong group/key would still pass them.
             // Reading through the getters pins the read path too.
             Settings reloaded;
-            QCOMPARE(reloaded.snappingShowBorder(), false);
-            QCOMPARE(reloaded.snappingHideTitleBars(), false);
+            QCOMPARE(reloaded.snappingShowBorder(), true);
+            QCOMPARE(reloaded.snappingHideTitleBars(), true);
             QCOMPARE(reloaded.snappingBorderWidth(), 4);
             QCOMPARE(reloaded.snappingBorderRadius(), 8);
             QCOMPARE(reloaded.snappingUseSystemBorderColors(), false);
@@ -402,6 +407,10 @@ private Q_SLOTS:
 
         QSignalSpy generalSpy(&settings, &Settings::settingsChanged);
         QSignalSpy specificSpy(&settings, &Settings::zonePaddingChanged);
+        // Without isValid(), a renamed/removed signal yields an invalid spy whose
+        // count() is 0, so the no-emit assertions below would pass vacuously.
+        QVERIFY(generalSpy.isValid());
+        QVERIFY(specificSpy.isValid());
 
         settings.setZonePadding(15); // same value again
 

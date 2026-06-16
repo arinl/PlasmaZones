@@ -140,12 +140,16 @@ public:
     ///      Tiling.Appearance.Decorations.HideTitleBars) and the
     ///      Surface.ShaderEffectId pack id,
     ///   - writes a DecorationProfileTree JSON (empty baseline + a `window`
-    ///     override: chain = [ShaderEffectId or "border"], border fields from
-    ///     the autotile values, clamped/colour-guarded) into
-    ///     Surface.DecorationProfileTree — ONLY when at least one of those keys
-    ///     is present (i.e. the user customised a value). A clean config that
-    ///     never touched these keys is left untouched, falling back to
-    ///     ConfigDefaults::decorationProfileTree() at read time.
+    ///     override) into Surface.DecorationProfileTree — ONLY when at least one
+    ///     of those keys is present (i.e. the user customised a value). The pack
+    ///     chain is the sole border on/off gate, so ShowBorder is APPLIED, not
+    ///     just read: ON (or, since ShowBorder defaults to false, an unset value)
+    ///     yields chain = [ShaderEffectId or "border"]; an explicit OFF yields an
+    ///     engaged-but-empty chain (no border). The border appearance fields
+    ///     (width/radius/colours, clamped/colour-guarded) are filed as the border
+    ///     pack's params regardless of the gate, so a later re-enable restores
+    ///     them. A clean config that never touched these keys is left untouched,
+    ///     falling back to ConfigDefaults::decorationProfileTree() at read time.
     /// Does NOT remove the source keys — this COPIES into the new tree (the
     /// kwin-effect still reads the old keys until a later stage). Does NOT stamp
     /// a version (its caller migrateV3ToV4 does). Public so it can be unit-tested

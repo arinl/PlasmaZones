@@ -159,9 +159,10 @@ public:
     // ── Whole-override mutator ─────────────────────────────────────────────
 
     /// Drop the entire per-surface override at @p path so the surface
-    /// fully inherits its ancestors / baseline. Rejected for "" (the
-    /// baseline can't be cleared — use clear*Field to disengage individual
-    /// baseline fields). @return true when an override was removed.
+    /// fully inherits its ancestors / baseline. Rejected for "" (the baseline
+    /// is the root and has nothing to inherit from; edit its fields directly via
+    /// setChain / setHideTitlebar instead). @return true when an override was
+    /// removed.
     Q_INVOKABLE bool clearOverride(const QString& path);
 
     /// Number of descendant surfaces under @p path that carry their own

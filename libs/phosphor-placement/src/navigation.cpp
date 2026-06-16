@@ -171,8 +171,16 @@ PhosphorProtocol::EmptyZoneList WindowTrackingService::getEmptyZones(const QStri
                                 : PhosphorEngine::GeometryDefaults::ZonePadding;
     auto og = m_geometryResolver ? m_geometryResolver->resolveOuterGaps(layout, screenId)
                                  : PhosphorLayout::EdgeGaps::uniform(PhosphorEngine::GeometryDefaults::OuterGap);
-    int defaultBw = m_geometryResolver ? m_geometryResolver->defaultBorderWidth() : 2;
-    int defaultBr = m_geometryResolver ? m_geometryResolver->defaultBorderRadius() : 0;
+    // The null-resolver fallbacks mirror PhosphorCompositor::DecorationDefaults
+    // (BorderWidth=2, BorderRadius=8) — the same source the resolver returns when
+    // present. They are duplicated as literals here because phosphor-placement
+    // does not depend on phosphor-compositor and pulling in that library for two
+    // constants is disproportionate; this branch is a degenerate safety path
+    // (production always wires a DaemonGeometryResolver).
+    constexpr int kFallbackBorderWidth = 2;
+    constexpr int kFallbackBorderRadius = 8;
+    int defaultBw = m_geometryResolver ? m_geometryResolver->defaultBorderWidth() : kFallbackBorderWidth;
+    int defaultBr = m_geometryResolver ? m_geometryResolver->defaultBorderRadius() : kFallbackBorderRadius;
 
     PhosphorProtocol::EmptyZoneList result;
     for (PhosphorZones::Zone* zone : layout->zones()) {

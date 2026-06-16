@@ -6,9 +6,11 @@
 // buffer0.frag this is a separable 2D Gaussian: a smooth, wide glow source that
 // effect.frag samples as iChannel1.
 //
-// iChannel0 is buffer0's FBO (bottom-origin, same UV space as this pass), so the
-// tap offsets use vTexCoord directly with no flip. Same fixed UV step + sigma as
-// buffer0 so the blur is isotropic in UV.
+// iChannel0 is buffer0's FBO, written in whatever orientation the runtime's
+// buffer chain uses (bottom-origin on the compositor, top-origin on Qt-RHI);
+// either way it shares this pass's UV space, and the symmetric ±i Gaussian kernel
+// is orientation-independent, so the tap offsets use vTexCoord directly with no
+// flip. Same fixed UV step + sigma as buffer0 so the blur is isotropic in UV.
 
 #version 450
 #include <surface_uniforms.glsl>

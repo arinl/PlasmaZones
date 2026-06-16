@@ -833,29 +833,27 @@ private:
     /// close / border removal (removeWindowBorder) to free GPU memory.
     std::unordered_map<QString, SurfaceMultipassState> m_surfaceMultipass;
 
-    /// Resolve which mode's BorderState manages @p windowId — autotile first,
-    /// then snap — or nullptr if neither draws a border for it.
-    const PhosphorCompositor::BorderState* resolveBorderStateFor(const QString& windowId) const;
-
     /// Resolve the DECORATION SURFACE PATH for @p windowId based on MEMBERSHIP
-    /// alone, IGNORING the owning mode's (legacy) showBorder gate:
+    /// alone:
     ///   • autotile member (AutotileStateHelpers::isTiledWindow) → "window.tiled"
     ///   • else snap member (SnapHandler::isTiledWindow)         → "window.snapped"
     ///   • else                                                  → "window.floating"
-    /// Mirrors resolveBorderStateFor's autotile-first precedence, but the
-    /// membership predicates strip the showBorder coupling so the resolved
-    /// profile's effectiveChain() (an empty chain = no decoration) is the sole
-    /// render gate (see updateWindowBorder).
+    /// Autotile-first precedence. The resolved profile's effectiveChain() (an
+    /// empty chain = no decoration) is the sole render gate (see
+    /// updateWindowBorder); there is no separate show-border gate.
     QString resolveSurfacePathFor(const QString& windowId) const;
 
-    /// Seed m_decorationTree's baseline with the same per-field defaults the
-    /// daemon's ConfigDefaults::decorationProfileTree() assembles, so decoration
-    /// renders correctly before the async `decorationProfileTreeJson` fetch lands
-    /// (mirrors how BorderState seeds DecorationDefaults pre-load). Called once
-    /// from the constructor. The effect cannot reach the GPL daemon ConfigDefaults,
-    /// so it builds the baseline from the shared DecorationDefaults constants + the
-    /// default "border" pack id; colours default invalid (the daemon delivers the
-    /// resolved colours, exactly as BorderState's colours arrive invalid pre-load).
+    /// Seed m_decorationTree's baseline so decoration renders sensibly before the
+    /// async `decorationProfileTreeJson` fetch lands (mirrors how BorderState
+    /// seeds DecorationDefaults pre-load). Called once from the constructor. The
+    /// effect cannot reach the GPL daemon ConfigDefaults, so it builds a TRANSIENT
+    /// placeholder from the shared DecorationDefaults constants (ShowBorder gate,
+    /// width, radius) plus the default "border" pack's OWN metadata-default
+    /// colours. The daemon's fetch overwrites the whole tree on arrival with its
+    /// authoritative colours (ZoneDefaults / system-accent-resolved), so the
+    /// placeholder's colours may differ from the daemon's for the brief pre-fetch
+    /// window; that is the same transient as BorderState's pre-load colours and is
+    /// corrected the instant the fetch lands.
     void seedDecorationTreeBaseline();
 
     /// Resolve the per-window-rule SetHideTitleBar override for @p windowId

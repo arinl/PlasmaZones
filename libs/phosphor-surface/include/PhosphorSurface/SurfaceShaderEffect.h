@@ -236,3 +236,7 @@ struct PHOSPHORSURFACE_EXPORT SurfaceShaderEffect
 // Q_RELOCATABLE_TYPE, so the aggregate is safely bitwise-relocatable.
 // Must sit at file scope outside the namespace per Qt convention.
 Q_DECLARE_TYPEINFO(PhosphorSurfaceShaders::SurfaceShaderEffect::TextureSlot, Q_RELOCATABLE_TYPE);
+// ParameterInfo is five QStrings + four QVariants; both QString and QVariant are
+// already Q_RELOCATABLE_TYPE, so the aggregate is safely bitwise-relocatable.
+// Declared for the same QList<ParameterInfo> reallocation benefit as TextureSlot.
+Q_DECLARE_TYPEINFO(PhosphorSurfaceShaders::SurfaceShaderEffect::ParameterInfo, Q_RELOCATABLE_TYPE);

@@ -342,8 +342,12 @@ void OverlayService::applyDecoration(QObject* slot, const QString& surfacePath)
         return;
     }
 
-    // Single-pass for now: take the first pack id in the resolved chain.
-    // (Multi-pack composition is out of scope for this stage.)
+    // The daemon overlay decoration path is single-pass by design: the QML
+    // SurfaceDecoration host runs ONE SurfaceShaderItem, so it renders the
+    // primary (first) pack of the resolved chain. Multi-pack buffer-chain
+    // composition is exclusive to the kwin-effect window path
+    // (renderSurfaceChainComposite), which has the FBO ping-pong machinery the
+    // QML overlay host does not.
     const QString packId = chain.constFirst();
     if (!m_surfaceShaderRegistry->hasEffect(packId)) {
         qCWarning(lcOverlay) << "Surface decoration (" << surfacePath << "): resolved pack id" << packId
@@ -362,9 +366,10 @@ void OverlayService::applyDecoration(QObject* slot, const QString& surfacePath)
 
     // The per-pack parameter overrides for THIS pack from the resolved profile.
     // Shape is { packId -> { paramId -> value } }; pull this pack's inner map.
-    // p_useSystemAccent is declared host-consumed, but live system-accent
-    // resolution is a deferred roadmap item: for this stage the pack's declared
-    // colour params pass through translateSurfaceParams unchanged.
+    // p_useSystemAccent is a host-consumed flag; the overlay path passes the
+    // pack's declared colour params through translateSurfaceParams unchanged
+    // (system-accent colour resolution is performed by the daemon's colour
+    // pipeline, not synthesised here).
     const QVariantMap allPackParams = profile.effectiveParameters();
     const QVariantMap friendlyParams = allPackParams.value(packId).toMap();
     const QVariantMap translatedParams = m_surfaceShaderRegistry->translateSurfaceParams(packId, friendlyParams);

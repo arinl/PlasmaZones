@@ -879,24 +879,18 @@ void appendAutotilingSchema(PhosphorConfig::Schema& schema)
 }
 
 // ─── Surface ────────────────────────────────────────────────────────────────
-// Global surface-shader selection: a single pack id (QString) and a per-pack
-// parameter override map (QVariantMap, paramId -> value) shared by all
-// decorated windows. The id is an opaque pack identifier validated by the
-// shader consumer, so no schema validator here (mirrors the rendering-backend
-// pattern's "stored as-is" intent without coercion). The parameter map
-// persists as a nested JSON object — same QVariantMap storage shape as the
-// autotile PerAlgorithmSettings entry above, but with no sanitizer because the
-// override schema is per-pack and not known to the config layer.
+// Per-surface decoration tree: a DecorationProfileTree (surface shader-pack
+// chain + border/titlebar appearance) keyed on a dot-path surface namespace,
+// persisted as a nested JSON object — same QVariantMap storage shape as the
+// autotile PerAlgorithmSettings entry above and the animation ShaderProfileTree
+// blob, with no sanitizer because the per-pack override schema is not known to
+// the config layer.
 
 void appendSurfaceSchema(PhosphorConfig::Schema& schema)
 {
     using CD = ConfigDefaults;
     schema.groups[CD::surfaceGroup()] = {
-        {CD::surfaceShaderEffectIdKey(), CD::surfaceShaderEffectId(), QMetaType::QString},
-        {CD::surfaceShaderParametersKey(), CD::surfaceShaderParameters(), QMetaType::QVariantMap},
-        // Per-surface decoration tree — persists as a nested JSON object (same
-        // QVariantMap storage shape as ShaderParameters above and the animation
-        // ShaderProfileTree blob). The v3→v4 migration seeds it (via
+        // Per-surface decoration tree. The v3→v4 migration seeds it (via
         // seedDecorationProfileTree); the default is the ConfigDefaults baseline
         // serialized to a map.
         {CD::surfaceDecorationTreeKey(), CD::decorationProfileTree().toJson().toVariantMap(), QMetaType::QVariantMap},

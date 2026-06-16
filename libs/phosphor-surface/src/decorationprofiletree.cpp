@@ -3,6 +3,8 @@
 
 #include <PhosphorSurface/DecorationProfileTree.h>
 
+#include <PhosphorSurface/DecorationSupportedPaths.h>
+
 #include <QJsonArray>
 #include <QJsonValue>
 
@@ -136,6 +138,15 @@ DecorationProfileTree DecorationProfileTree::fromJson(const QJsonObject& obj)
         const QJsonObject entry = v.toObject();
         const QString path = entry.value(QLatin1String("path")).toString();
         if (path.isEmpty())
+            continue;
+        // Defence-in-depth at the persistence boundary: drop overrides for paths
+        // that name no decorable surface (junk / a path retired in a newer
+        // version). Pack ids are intentionally NOT validated here — the registry
+        // loads packs asynchronously and is the catalogue, not the gate, so an
+        // override for a not-yet-loaded pack must survive and resolve to a no-op
+        // at render time rather than be silently dropped on load. The settings
+        // UI (DecorationPageController) remains the primary path validator.
+        if (!decorationSurfaceSupported(path))
             continue;
         // setOverride de-dups: a malformed file with duplicate entries for the
         // same path resolves to last-value-wins (keeping the first-seen position),

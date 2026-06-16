@@ -9,29 +9,25 @@ import org.kde.kirigami as Kirigami
 import org.plasmazones.common as PZCommon
 
 /**
- * @brief Shared timing + shader editor body used by every page that
- *        builds an animation profile.
+ * @brief Timing + shader editor body for the per-event animation card.
  *
  * Owns the working-state properties for both axes (curve / duration
  * for timing, effect id / parameter map for shader) and renders the
- * widget tree the per-event card and the App Rules form both need
- * (CurveThumbnail + Customize button → CurveEditorDialog,
- * timing-mode combo, duration slider, CategoryMenuButton +
- * ShaderParamsEditor — the shared editor + colour dialog + lock /
- * randomize host).
+ * widget tree the per-event card needs (CurveThumbnail + Customize
+ * button → CurveEditorDialog, timing-mode combo, duration slider,
+ * CategoryMenuButton + ShaderParamsEditor — the shared editor + colour
+ * dialog + lock / randomize host).
  *
- * The editor is intentionally persistence-agnostic: it emits
- * @c valueChanged() whenever any tracked field is touched, and the
- * consumer decides whether to commit live (per-event card) or batch
- * the result on a single button click (App Rules). Properties are
- * fully read-write so a consumer can also seed the editor from disk
- * before showing it.
+ * The editor emits @c valueChanged() whenever any tracked field is
+ * touched; the consumer commits live. Properties are fully read-write
+ * so the consumer can seed the editor from disk before showing it. The
+ * picker model and parameter schema are fed in by the consumer
+ * (@c availableShaders / @c shaderParamSchema) so the editor doesn't
+ * reach a global context itself.
  *
- * The shader-parameter sub-editor exposes the same locking /
- * randomize / colour-picker affordances as the per-event card via
- * the @c enableLocking / @c enableRandomize / @c enableImage flags;
- * pages that don't want them (App Rules) leave the flags at their
- * defaults.
+ * The shader-parameter sub-editor exposes locking / randomize /
+ * colour-picker affordances via the @c enableLocking / @c enableRandomize
+ * / @c enableImage flags.
  */
 ColumnLayout {
     id: root
@@ -73,24 +69,22 @@ ColumnLayout {
     /// card sets this false for events whose runtime path doesn't
     /// consume a shader leg (e.g. `panel.slideIn`).
     property bool shaderLegSupported: true
-    /// Whether the shader section is rendered (in addition to the
-    /// shader-leg gate above). The App Rules page sets this to
-    /// `false` when the user picks the Timing-kind radio so the
-    /// shader controls collapse out of the form.
-    property bool showShaderSection: true
-    /// Whether to render the timing section (curve / duration). Per-
-    /// event cards always render it; the App Rules page hides it when
-    /// the user picks the Shader-kind radio.
+    /// Whether to render the timing section (curve / duration). The
+    /// per-event card hides it when its master override toggle is off.
     property bool showTimingSection: true
     /// Bumped externally on `shaderEffectsChanged` so this editor's
-    /// `shaderParameters(effectId)` schema binding re-evaluates when a
-    /// pack is dropped / removed mid-session.
+    /// consumer-fed picker / schema bindings re-evaluate when a pack is
+    /// dropped / removed mid-session.
     property int registryRevision: 0
     /// Picker model — the consumer hands in
     /// `availableShaderEffects()` (or a registry-tick-bound
     /// equivalent) so the picker stays reactive without this editor
     /// having to subscribe.
     property var availableShaders: []
+    /// Parameter schema for the currently-picked shader — the consumer
+    /// hands in `shaderParameters(shaderEffectId)` (registry-tick-bound)
+    /// so the editor doesn't reach a global context for it.
+    property var shaderParamSchema: []
     // ── Shader-param editor feature toggles ─────────────────────────
     /// Locking is per-event-card-only — App Rules don't need it.
     property bool enableLocking: false
@@ -99,16 +93,6 @@ ColumnLayout {
     /// Image picker is reserved for shader textures (overlay packs);
     /// animation packs don't use it.
     property bool enableImage: false
-    // ── Inheritance opt-out (App Rules mode) ────────────────────────
-    /// When true, render `Override curve` / `Override duration`
-    /// checkboxes that gate whether the saved value commits the
-    /// engaged-empty / zero sentinel for that axis (so the rule
-    /// resolver falls through to the per-event default). The
-    /// per-event card leaves this false — its master override toggle
-    /// handles the inherit-vs-set decision at a higher level.
-    property bool showOverrideCheckboxes: false
-    property bool overrideCurve: true
-    property bool overrideDuration: true
     // ── Computed ────────────────────────────────────────────────────
     /// Wire-format curve string the rule / profile schema expects.
     readonly property string curveString: {
@@ -191,35 +175,9 @@ ColumnLayout {
         spacing: Kirigami.Units.smallSpacing
 
         // Curve summary row: thumbnail + description + Customize…
-        // The override-curve checkbox sits on the same row so the
-        // user can disable the override without losing their working
-        // state.
-        // Curve override checkbox — own row in App Rules mode so it
-        // doesn't crowd the curve summary preview / button below.
-        // Hidden entirely in per-event-card mode (the card's master
-        // override toggle gates the whole timing section).
-        CheckBox {
-            Layout.fillWidth: true
-            visible: root.showOverrideCheckboxes
-            text: i18n("Override curve")
-            checked: root.overrideCurve
-            onToggled: {
-                root.overrideCurve = checked;
-                root.valueChanged();
-            }
-            ToolTip.text: i18n("When off, the per-event default curve is used.")
-            ToolTip.visible: hovered
-        }
-
-        // Curve summary row: thumbnail + description + Customize…
-        // Dimmed when the override is off so the user can still see
-        // the inherited preview without it competing for visual
-        // weight with the active controls.
         RowLayout {
             Layout.fillWidth: true
             spacing: Kirigami.Units.largeSpacing
-            opacity: (!root.showOverrideCheckboxes || root.overrideCurve) ? 1 : 0.5
-            enabled: !root.showOverrideCheckboxes || root.overrideCurve
 
             CurveThumbnail {
                 id: curveThumbnail
@@ -265,7 +223,6 @@ ColumnLayout {
         // Timing mode — Easing vs Spring discriminator.
         SettingsRow {
             title: i18n("Timing mode")
-            enabled: !root.showOverrideCheckboxes || root.overrideCurve
 
             WideComboBox {
                 Accessible.name: i18n("Timing mode")
@@ -283,25 +240,9 @@ ColumnLayout {
             visible: root.timingMode === CurvePresets.timingModeEasing
         }
 
-        // Duration override checkbox — same own-row layout as the
-        // curve override above. Hidden in per-event-card mode.
-        CheckBox {
-            Layout.fillWidth: true
-            visible: root.showOverrideCheckboxes && root.timingMode === CurvePresets.timingModeEasing
-            text: i18n("Override duration")
-            checked: root.overrideDuration
-            onToggled: {
-                root.overrideDuration = checked;
-                root.valueChanged();
-            }
-            ToolTip.text: i18n("When off, the per-event default duration is used.")
-            ToolTip.visible: hovered
-        }
-
         SettingsRow {
             visible: root.timingMode === CurvePresets.timingModeEasing
             title: i18n("Duration")
-            enabled: !root.showOverrideCheckboxes || root.overrideDuration
 
             SettingsSlider {
                 from: 50
@@ -321,11 +262,11 @@ ColumnLayout {
 
     // ── Shader section ──────────────────────────────────────────────
     SettingsSeparator {
-        visible: root.shaderLegSupported && root.showShaderSection && root.showTimingSection
+        visible: root.shaderLegSupported && root.showTimingSection
     }
 
     SettingsRow {
-        visible: root.shaderLegSupported && root.showShaderSection
+        visible: root.shaderLegSupported
         title: i18n("Shader effect")
         description: i18n("Apply a shader transition to this event")
 
@@ -357,13 +298,13 @@ ColumnLayout {
     PZCommon.ShaderParamsEditor {
         id: paramEditor
 
-        readonly property var _paramSchema: {
-            void (root.registryRevision);
-            return root.shaderEffectId.length > 0 ? settingsController.animationsPage.shaderParameters(root.shaderEffectId) : [];
-        }
+        // Schema is consumer-fed (root.shaderParamSchema) so this editor
+        // doesn't reach a global context; the consumer binds it to
+        // shaderParameters(shaderEffectId) with a registry-tick dependency.
+        readonly property var _paramSchema: root.shaderParamSchema
 
         Layout.fillWidth: true
-        visible: root.shaderLegSupported && root.showShaderSection && root.shaderEffectId.length > 0 && _paramSchema.length > 0
+        visible: root.shaderLegSupported && root.shaderEffectId.length > 0 && _paramSchema.length > 0
         parameters: _paramSchema
         currentValues: root.shaderParams
         effectId: root.shaderEffectId

@@ -73,7 +73,13 @@ void WindowTrackingService::populateResnapBufferForAllScreens(const QSet<QString
         // Desktop filter: a per-desktop layout change should resnap only the
         // windows on that desktop. virtualDesktop==0 means sticky / unknown
         // (visible on every desktop) so include those regardless of the filter.
-        if (desktopFilter > 0 && virtualDesktop != 0 && virtualDesktop != desktopFilter)
+        // Under Plasma 6.7 per-output virtual desktops (#648) the "current desktop"
+        // is per-screen, so when filtering (desktopFilter > 0) compare each window
+        // against ITS screen's current desktop rather than the single global value
+        // the caller passed (falling back to that value when no VDM is wired).
+        const int screenDesktop =
+            m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktopForScreen(screenId) : desktopFilter;
+        if (desktopFilter > 0 && virtualDesktop != 0 && virtualDesktop != screenDesktop)
             return;
 
         if (addedIds.contains(windowId))
@@ -146,6 +152,19 @@ QStringList WindowTrackingService::buildZoneOrderedWindowList(const QString& scr
     // depending on the code path. Use screensMatch() for format-agnostic comparison.
     const QHash<QString, QString>& snapScreens = m_snapState->screenAssignments();
     const QHash<QString, QStringList>& snapZones = m_snapState->zoneAssignments();
+    const QHash<QString, int>& snapDesktops = m_snapState->desktopAssignments();
+
+    // This list SEEDS the autotile state for (screenId, CURRENT virtual desktop).
+    // Snap assignments are screen-keyed but desktop-agnostic, so the same screen
+    // can hold windows snapped on a DIFFERENT desktop (e.g. screen S snaps on VD1
+    // and autotiles on VD2 via per-desktop rules). Those off-desktop windows must
+    // NOT be pulled into this desktop's autotile state — doing so eagerly inserts
+    // and tiles a window that lives on another desktop, overwriting its snap
+    // geometry there (switching to the autotile desktop would corrupt the snap
+    // desktop's window positions). Scope to the current desktop; desktop==0
+    // (sticky / unknown) stays desktop-agnostic and is kept. Mirrors the
+    // desktopFilter guard in populateResnapBufferForAllScreens (addCandidate).
+    const int currentDesktop = m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktopForScreen(screenId) : 0;
 
     int insertionIdx = 0;
     QVector<std::tuple<int, int, QString>> windowsByZone; // (zoneNum, insertionIdx, windowId)
@@ -154,6 +173,10 @@ QStringList WindowTrackingService::buildZoneOrderedWindowList(const QString& scr
             continue;
         }
         const QString& windowId = it.key();
+        const int windowDesktop = snapDesktops.value(windowId, 0);
+        if (currentDesktop > 0 && windowDesktop != 0 && windowDesktop != currentDesktop) {
+            continue;
+        }
         // Skip floating windows — they should not participate in zone-ordered
         // transitions (the user's manual-mode float choice should be preserved).
         if (isWindowFloating(windowId)) {
@@ -228,7 +251,6 @@ QHash<QString, QRect> WindowTrackingService::updatedWindowGeometries() const
 QHash<QString, WindowTrackingService::PendingRestoreTarget> WindowTrackingService::pendingRestoreGeometries() const
 {
     QHash<QString, PendingRestoreTarget> result;
-    int currentDesktop = m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktop() : 0;
 
     // Source the effect's instant-restore cache from the unified placement store:
     // one snapped WindowPlacement per appId-keyed window, resolved to its zone
@@ -251,6 +273,10 @@ QHash<QString, WindowTrackingService::PendingRestoreTarget> WindowTrackingServic
         }
 
         const QString screenId = resolveEffectiveScreenId(p.screenId);
+        // Per-output virtual desktops (#648): validate the record against ITS
+        // screen's current desktop, not the global current.
+        const int currentDesktop =
+            m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktopForScreen(screenId) : 0;
 
         // Skip screens currently in autotile mode — autotile owns placement there
         // and would otherwise fight a stale snap teleport. Both context

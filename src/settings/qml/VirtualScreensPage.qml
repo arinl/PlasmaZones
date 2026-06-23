@@ -4,7 +4,10 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import org.kde.kirigami as Kirigami
+import org.plasmazones.common as QFZCommon
+import org.phosphor.animation
 
 /**
  * @brief Settings page for virtual screen configuration.
@@ -33,6 +36,10 @@ SettingsFlickable {
     // Grid dimensions inferred from pending screens
     property int _columns: 1
     property int _rows: 1
+    // Flips true one tick after the first geometry resolution so the preview
+    // box doesn't animate the initial fallback(16:9)→real-aspect jump on page
+    // open; monitor switches afterwards still animate.
+    property bool _geometrySettled: false
 
     function _refreshConfig() {
         if (_selectedScreen === "")
@@ -147,6 +154,15 @@ SettingsFlickable {
     }
 
     function _updateScreenGeometry() {
+        // Mark geometry settled on the next tick the first time we resolve, so
+        // the initial fallback→real transition lands without animating (the
+        // Behaviors below gate on _geometrySettled). Scheduled here, before the
+        // assignments, so it survives the function's several early returns.
+        if (!root._geometrySettled)
+            Qt.callLater(function () {
+                root._geometrySettled = true;
+            });
+
         var screens = settingsController.screens;
         // First pass: exact name match (physical screen entry)
         for (var i = 0; i < screens.length; i++) {
@@ -460,7 +476,8 @@ SettingsFlickable {
                 Label {
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     text: {
-                        let res = root._screenWidth + " \u00d7 " + root._screenHeight;
+                        let orient = root._screenHeight > root._screenWidth ? i18nc("@label screen orientation", "Portrait") : i18nc("@label screen orientation", "Landscape");
+                        let res = root._screenWidth + " \u00d7 " + root._screenHeight + " \u00b7 " + orient;
                         let count = root._pendingScreens.length;
                         if (count > 1) {
                             if (root._rows > 1)
@@ -479,13 +496,20 @@ SettingsFlickable {
                 VirtualScreenPreview {
                     id: previewRect
 
-                    Layout.fillWidth: true
-                    Layout.maximumWidth: Kirigami.Units.gridUnit * 30
+                    // Fit the screen's real pixel dimensions inside the available
+                    // box so the preview is portrait for portrait monitors and
+                    // landscape for landscape ones — not a fixed horizontal
+                    // rectangle. A single uniform scale drives both width and
+                    // height off the true monitor size (bounded by the card's
+                    // content width and a max height, smaller bound wins), so the
+                    // whole screen always fits; the box is then centred.
+                    readonly property real _availWidth: Math.min(parent.width - Kirigami.Units.largeSpacing * 2, Kirigami.Units.gridUnit * 30)
+                    readonly property real _maxHeight: Kirigami.Units.gridUnit * 16
+                    readonly property real _fitScale: (root._screenWidth > 0 && root._screenHeight > 0) ? Math.min(_availWidth / root._screenWidth, _maxHeight / root._screenHeight) : 0
+
                     Layout.alignment: Qt.AlignHCenter
-                    Layout.preferredHeight: {
-                        var ratio = root._screenHeight / root._screenWidth;
-                        return Math.min(width * ratio, Kirigami.Units.gridUnit * 10);
-                    }
+                    Layout.preferredWidth: _fitScale > 0 ? root._screenWidth * _fitScale : _availWidth
+                    Layout.preferredHeight: _fitScale > 0 ? root._screenHeight * _fitScale : _availWidth * 9 / 16
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     Layout.rightMargin: Kirigami.Units.largeSpacing
                     Layout.bottomMargin: Kirigami.Units.largeSpacing
@@ -500,6 +524,25 @@ SettingsFlickable {
                     onRowDividerMoved: function (rowIndex, newFraction) {
                         root._moveRowDivider(rowIndex, newFraction);
                     }
+
+                    // Smoothly morph the box when switching monitors or changing
+                    // the split — width and height animate independently so a
+                    // landscape→portrait change eases into the new shape.
+                    Behavior on Layout.preferredWidth {
+                        enabled: root._geometrySettled
+                        PhosphorMotionAnimation {
+                            profile: "widget.hover"
+                            durationOverride: Kirigami.Units.longDuration
+                        }
+                    }
+
+                    Behavior on Layout.preferredHeight {
+                        enabled: root._geometrySettled
+                        PhosphorMotionAnimation {
+                            profile: "widget.hover"
+                            durationOverride: Kirigami.Units.longDuration
+                        }
+                    }
                 }
             }
         }
@@ -512,170 +555,197 @@ SettingsFlickable {
             contentItem: ColumnLayout {
                 spacing: Kirigami.Units.largeSpacing
 
-                // Horizontal split presets
-                Label {
-                    Layout.leftMargin: Kirigami.Units.largeSpacing
-                    text: i18n("Horizontal Splits")
-                    font: Kirigami.Theme.smallFont
-                    color: Kirigami.Theme.disabledTextColor
-                }
-
-                GridLayout {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: Kirigami.Units.largeSpacing
-                    Layout.rightMargin: Kirigami.Units.largeSpacing
-                    columns: 2
-                    uniformCellWidths: true
-                    columnSpacing: Kirigami.Units.smallSpacing
-                    rowSpacing: Kirigami.Units.smallSpacing
-
-                    Button {
-                        Layout.fillWidth: true
-                        text: i18n("50 / 50")
-                        enabled: root._selectedScreen !== ""
-                        highlighted: root._matchesPreset(root._horizontalRegions([50, 50], ["", ""]))
-                        onClicked: root._loadPreset(root._horizontalRegions([50, 50], [i18n("Left"), i18n("Right")]))
-                        Accessible.name: i18n("Preset: %1", text)
-                    }
-
-                    Button {
-                        Layout.fillWidth: true
-                        text: i18n("60 / 40")
-                        enabled: root._selectedScreen !== ""
-                        highlighted: root._matchesPreset(root._horizontalRegions([60, 40], ["", ""]))
-                        onClicked: root._loadPreset(root._horizontalRegions([60, 40], [i18n("Main"), i18n("Side")]))
-                        Accessible.name: i18n("Preset: %1", text)
-                    }
-
-                    Button {
-                        Layout.fillWidth: true
-                        text: i18n("33 / 33 / 33")
-                        enabled: root._selectedScreen !== ""
-                        highlighted: root._matchesPreset(root._horizontalRegions([33.3, 33.4, 33.3], ["", "", ""]))
-                        onClicked: root._loadPreset(root._horizontalRegions([33.3, 33.4, 33.3], [i18n("Left"), i18n("Center"), i18n("Right")]))
-                        Accessible.name: i18n("Preset: %1", text)
-                    }
-
-                    Button {
-                        Layout.fillWidth: true
-                        text: i18n("40 / 20 / 40")
-                        enabled: root._selectedScreen !== ""
-                        highlighted: root._matchesPreset(root._horizontalRegions([40, 20, 40], ["", "", ""]))
-                        onClicked: root._loadPreset(root._horizontalRegions([40, 20, 40], [i18n("Left"), i18n("Center"), i18n("Right")]))
-                        Accessible.name: i18n("Preset: %1", text)
-                    }
-                }
-
-                // Vertical and grid presets
-                Label {
-                    Layout.leftMargin: Kirigami.Units.largeSpacing
-                    text: i18n("Vertical & Grid")
-                    font: Kirigami.Theme.smallFont
-                    color: Kirigami.Theme.disabledTextColor
-                }
-
+                // Preset card grid. Each card shows a ZonePreview thumbnail + label
+                // and applies the split via _loadPreset(); the active preset is
+                // highlighted via _matchesPreset(). One flat, data-driven grid
+                // replaces the old two groups of plain text buttons. The
+                // builders (_horizontalRegions / _gridRegions) and matcher are
+                // reused unchanged — this is purely the presentation.
                 GridLayout {
                     Layout.fillWidth: true
                     Layout.leftMargin: Kirigami.Units.largeSpacing
                     Layout.rightMargin: Kirigami.Units.largeSpacing
                     Layout.bottomMargin: Kirigami.Units.largeSpacing
-                    columns: 2
+                    columns: 4
                     uniformCellWidths: true
                     columnSpacing: Kirigami.Units.smallSpacing
                     rowSpacing: Kirigami.Units.smallSpacing
 
-                    Button {
-                        Layout.fillWidth: true
-                        text: i18n("50 / 50 Vertical")
-                        enabled: root._selectedScreen !== ""
-                        highlighted: root._matchesPreset(root._gridRegions(1, 2, []))
-                        onClicked: root._loadPreset(root._gridRegions(1, 2, [i18n("Top"), i18n("Bottom")]))
-                        Accessible.name: i18n("Preset: %1", text)
-                    }
-
-                    Button {
-                        Layout.fillWidth: true
-                        text: i18n("50 / 50 Grid")
-                        enabled: root._selectedScreen !== ""
-                        highlighted: root._matchesPreset(root._gridRegions(2, 2, []))
-                        onClicked: root._loadPreset(root._gridRegions(2, 2, [i18n("Top-Left"), i18n("Top-Right"), i18n("Bottom-Left"), i18n("Bottom-Right")]))
-                        Accessible.name: i18n("Preset: %1", text)
-                    }
-
-                    Button {
-                        Layout.fillWidth: true
-                        text: i18n("33 / 33 / 33 Grid")
-                        enabled: root._selectedScreen !== ""
-                        highlighted: root._matchesPreset(root._gridRegions(3, 2, []))
-                        onClicked: root._loadPreset(root._gridRegions(3, 2, [i18n("Top-Left"), i18n("Top-Center"), i18n("Top-Right"), i18n("Bottom-Left"), i18n("Bottom-Center"), i18n("Bottom-Right")]))
-                        Accessible.name: i18n("Preset: %1", text)
-                    }
-
-                    Button {
-                        Layout.fillWidth: true
-                        text: i18n("60 / 40 Grid")
-                        enabled: root._selectedScreen !== ""
-                        highlighted: root._matchesPreset([
+                    Repeater {
+                        model: [
                             {
-                                "x": 0,
-                                "y": 0,
-                                "width": 0.6,
-                                "height": 0.5,
-                                "displayName": ""
+                                "label": i18n("50% / 50%"),
+                                "detail": i18n("Horizontal"),
+                                "regions": root._horizontalRegions([50, 50], [i18n("Left"), i18n("Right")])
                             },
                             {
-                                "x": 0.6,
-                                "y": 0,
-                                "width": 0.4,
-                                "height": 0.5,
-                                "displayName": ""
+                                "label": i18n("60% / 40%"),
+                                "detail": i18n("Horizontal"),
+                                "regions": root._horizontalRegions([60, 40], [i18n("Main"), i18n("Side")])
                             },
                             {
-                                "x": 0,
-                                "y": 0.5,
-                                "width": 0.6,
-                                "height": 0.5,
-                                "displayName": ""
+                                "label": i18n("33% / 33% / 33%"),
+                                "detail": i18n("Horizontal"),
+                                "regions": root._horizontalRegions([33.3, 33.4, 33.3], [i18n("Left"), i18n("Center"), i18n("Right")])
                             },
                             {
-                                "x": 0.6,
-                                "y": 0.5,
-                                "width": 0.4,
-                                "height": 0.5,
-                                "displayName": ""
+                                "label": i18n("40% / 20% / 40%"),
+                                "detail": i18n("Horizontal"),
+                                "regions": root._horizontalRegions([40, 20, 40], [i18n("Left"), i18n("Center"), i18n("Right")])
+                            },
+                            {
+                                "label": i18n("50% / 50%"),
+                                "detail": i18n("Vertical"),
+                                "regions": root._gridRegions(1, 2, [i18n("Top"), i18n("Bottom")])
+                            },
+                            {
+                                "label": i18n("50% / 50%"),
+                                "detail": i18n("Grid"),
+                                "regions": root._gridRegions(2, 2, [i18n("Top-Left"), i18n("Top-Right"), i18n("Bottom-Left"), i18n("Bottom-Right")])
+                            },
+                            {
+                                "label": i18n("33% / 33% / 33%"),
+                                "detail": i18n("Grid"),
+                                "regions": root._gridRegions(3, 2, [i18n("Top-Left"), i18n("Top-Center"), i18n("Top-Right"), i18n("Bottom-Left"), i18n("Bottom-Center"), i18n("Bottom-Right")])
+                            },
+                            {
+                                "label": i18n("60% / 40%"),
+                                "detail": i18n("Grid"),
+                                "regions": [
+                                    {
+                                        "x": 0,
+                                        "y": 0,
+                                        "width": 0.6,
+                                        "height": 0.5,
+                                        "displayName": i18n("Top-Main")
+                                    },
+                                    {
+                                        "x": 0.6,
+                                        "y": 0,
+                                        "width": 0.4,
+                                        "height": 0.5,
+                                        "displayName": i18n("Top-Side")
+                                    },
+                                    {
+                                        "x": 0,
+                                        "y": 0.5,
+                                        "width": 0.6,
+                                        "height": 0.5,
+                                        "displayName": i18n("Bottom-Main")
+                                    },
+                                    {
+                                        "x": 0.6,
+                                        "y": 0.5,
+                                        "width": 0.4,
+                                        "height": 0.5,
+                                        "displayName": i18n("Bottom-Side")
+                                    }
+                                ]
                             }
-                        ])
-                        onClicked: root._loadPreset([
-                            {
-                                "x": 0,
-                                "y": 0,
-                                "width": 0.6,
-                                "height": 0.5,
-                                "displayName": i18n("Top-Main")
-                            },
-                            {
-                                "x": 0.6,
-                                "y": 0,
-                                "width": 0.4,
-                                "height": 0.5,
-                                "displayName": i18n("Top-Side")
-                            },
-                            {
-                                "x": 0,
-                                "y": 0.5,
-                                "width": 0.6,
-                                "height": 0.5,
-                                "displayName": i18n("Bottom-Main")
-                            },
-                            {
-                                "x": 0.6,
-                                "y": 0.5,
-                                "width": 0.4,
-                                "height": 0.5,
-                                "displayName": i18n("Bottom-Side")
+                        ]
+
+                        delegate: ItemDelegate {
+                            id: presetCard
+
+                            required property var modelData
+                            required property int index
+
+                            readonly property bool active: root._matchesPreset(presetCard.modelData.regions)
+
+                            // Inner padding (card border -> content) applied as a
+                            // margin inside contentItem below, not via the Control's
+                            // padding: the org.kde.desktop ItemDelegate style overrides
+                            // per-side padding, so it would be ignored and the content
+                            // hugged the border. Control padding zeroed.
+                            readonly property real _cardPad: Kirigami.Units.largeSpacing
+
+                            Layout.fillWidth: true
+                            enabled: root._selectedScreen !== ""
+                            hoverEnabled: true
+                            padding: 0
+                            Accessible.name: i18n("Preset: %1 %2", presetCard.modelData.label, presetCard.modelData.detail)
+                            // Deep-copy the preset's regions so divider drags mutate
+                            // _pendingScreens, not the shared model entry.
+                            onClicked: root._loadPreset(presetCard.modelData.regions.map(function (r) {
+                                return {
+                                    "x": r.x,
+                                    "y": r.y,
+                                    "width": r.width,
+                                    "height": r.height,
+                                    "displayName": r.displayName
+                                };
+                            }))
+
+                            // Selection highlight follows the layout-grid convention
+                            // (LayoutGridDelegate): a subtle accent wash + accent
+                            // border, not a full-opacity fill.
+                            background: Rectangle {
+                                radius: Kirigami.Units.smallSpacing * 1.5
+                                color: presetCard.active ? Qt.rgba(Kirigami.Theme.highlightColor.r, Kirigami.Theme.highlightColor.g, Kirigami.Theme.highlightColor.b, 0.15) : (presetCard.hovered ? Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.06) : Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.03))
+                                border.width: Math.round(Screen.devicePixelRatio)
+                                border.color: presetCard.active ? Qt.rgba(Kirigami.Theme.highlightColor.r, Kirigami.Theme.highlightColor.g, Kirigami.Theme.highlightColor.b, 0.5) : (presetCard.hovered ? Qt.rgba(Kirigami.Theme.highlightColor.r, Kirigami.Theme.highlightColor.g, Kirigami.Theme.highlightColor.b, 0.3) : Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.08))
                             }
-                        ])
-                        Accessible.name: i18n("Preset: %1", text)
+
+                            contentItem: Item {
+                                implicitWidth: presetRow.implicitWidth + presetCard._cardPad * 2
+                                implicitHeight: presetRow.implicitHeight + presetCard._cardPad * 2
+
+                                RowLayout {
+                                    id: presetRow
+
+                                    anchors.fill: parent
+                                    anchors.margins: presetCard._cardPad
+                                    spacing: Kirigami.Units.largeSpacing
+
+                                    // Preview thumbnail (left): fixed 16:9 box using the
+                                    // shared ZonePreview + the same box treatment as
+                                    // LayoutThumbnail (0.08 fill, accent border that
+                                    // thickens when active). Zone numbers off — the split
+                                    // shape is what matters here.
+                                    Rectangle {
+                                        Layout.preferredHeight: Kirigami.Units.gridUnit * 3
+                                        Layout.preferredWidth: Kirigami.Units.gridUnit * 3 * 16 / 9
+                                        Layout.alignment: Qt.AlignVCenter
+                                        radius: Kirigami.Units.smallSpacing
+                                        color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.08)
+                                        border.width: presetCard.active ? Math.round(Screen.devicePixelRatio * 2.5) : Math.round(Screen.devicePixelRatio)
+                                        border.color: presetCard.active ? Kirigami.Theme.highlightColor : Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.12)
+
+                                        QFZCommon.ZonePreview {
+                                            anchors.fill: parent
+                                            anchors.margins: Kirigami.Units.smallSpacing
+                                            zones: presetCard.modelData.regions
+                                            isActive: presetCard.active
+                                            zonePadding: Math.round(Kirigami.Units.smallSpacing / 2)
+                                            edgeGap: Math.round(Kirigami.Units.smallSpacing / 2)
+                                            minZoneSize: 6
+                                            showZoneNumbers: false
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        Layout.alignment: Qt.AlignVCenter
+                                        spacing: 0
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: presetCard.modelData.label
+                                            font.weight: Font.Medium
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: presetCard.modelData.detail
+                                            font: Kirigami.Theme.smallFont
+                                            color: Kirigami.Theme.disabledTextColor
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

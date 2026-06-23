@@ -18,9 +18,11 @@ import org.plasmazones.common as PZCommon
  * there is no per-type `if (t === "...")` ladder here. Two-way: edits emit
  * `actionEdited(updatedAction)`; the parent owns the list.
  *
- * For `overrideAnimationShader`, a `ShaderParameterEditor` surfaces below the
- * row when an effect is selected so shader uniforms can be edited in place —
- * matching the animation-settings page's per-event editor.
+ * For `overrideAnimationShader` and `overrideOverlayShader`, a
+ * `ShaderParameterEditor` surfaces below the row when an effect is selected so
+ * shader uniforms can be edited in place — matching the animation-settings
+ * page's per-event editor. Each shader-override type sources its uniform schema
+ * from its own registry (animation vs overlay/snapping).
  */
 ColumnLayout {
     id: row
@@ -61,6 +63,21 @@ ColumnLayout {
     readonly property var _typeEntry: row._entryForType(row.action.type)
     /// Parameter descriptors for the current type (empty when none / unknown).
     readonly property var _params: row._typeEntry !== undefined ? row._typeEntry.params : []
+    /// Combined input-format hint(s) for the current params — the optional
+    /// `param.hint` strings from the action metadata (windowruleauthoring's
+    /// paramHint), joined one per line. Empty when no param carries a hint.
+    /// Surfaces the accepted syntax (e.g. zone-number lists / ranges) that a
+    /// placeholder can't show once the field holds a value; there is no
+    /// per-type ladder here — a param gets a hint only if its descriptor does.
+    readonly property string _paramHint: {
+        var parts = [];
+        for (var i = 0; i < row._params.length; i++) {
+            var h = row._params[i].hint;
+            if (h !== undefined && h.length > 0)
+                parts.push(h);
+        }
+        return parts.join("\n");
+    }
     /// Shader-uniform schema for the action's currently-selected effect. Empty
     /// when the action is not a shader-override, no effect is set, or the
     /// effect declares no parameters. Drives the inline shader editor below
@@ -75,6 +92,38 @@ ColumnLayout {
 
         var controller = row.appSettings ? row.appSettings.animationsController : null;
         return controller ? controller.shaderParameters(effectId) : [];
+    }
+    /// Shader-uniform schema for OverrideOverlayShader — same shape as
+    /// `_shaderParamSchema` but sourced from the overlay/snapping shader
+    /// registry (the catalog entry's `parameters`), not the animation one.
+    readonly property var _overlayShaderParamSchema: {
+        if (row.action.type !== "overrideOverlayShader")
+            return [];
+
+        var effectId = row.action.effectId || "";
+        if (effectId.length === 0)
+            return [];
+
+        var controller = row.appSettings ? row.appSettings.snappingShadersPage : null;
+        if (!controller)
+            return [];
+
+        var effects = controller.availableShaderEffects() || [];
+        for (var i = 0; i < effects.length; ++i) {
+            if (effects[i].id === effectId)
+                return effects[i].parameters || [];
+        }
+        return [];
+    }
+    /// The active shader-uniform schema for whichever shader-override action is
+    /// being edited (animation or overlay) — drives the inline
+    /// ShaderParamsEditor below the row.
+    readonly property var _activeShaderParamSchema: {
+        if (row.action.type === "overrideAnimationShader")
+            return row._shaderParamSchema;
+        if (row.action.type === "overrideOverlayShader")
+            return row._overlayShaderParamSchema;
+        return [];
     }
     /// Stable empty-object fallback for the inline shader params editor's
     /// `currentValues` binding — using `({})` inline would allocate a new
@@ -108,12 +157,20 @@ ColumnLayout {
     // Parse decides which mode to seed the dialog with; Apply encodes the
     // dialog's working state back into one of those forms.
     property Component _curveEditorEditor
-    // Shader-effect picker — `availableShaderEffects()` returns rows with
-    // `{id, name, …}`. Wire value is the effect id; the dropdown shows the
-    // friendly name.
+    // Shader-effect picker — a cascading category menu fed by the path-aware
+    // `availableShaderEffectsForPath(event)`, so shaders group by category and
+    // ones incompatible with the action's target event render dimmed. Wire
+    // value is the effect id.
     property Component _shaderEffectEditor
-    // Inline shader-uniform editor for OverrideAnimationShader actions. The
-    // action stores a nested `params` object (the shader uniform values);
+    // Overlay-shader picker for OverrideOverlayShader actions — the overlay/
+    // snapping shader registry (Snapping → Shaders page), distinct from the
+    // animation shaders above. Wire value is the shader id.
+    property Component _overlayShaderEditor
+    // Inline shader-uniform editor shared by both shader-override actions
+    // (OverrideAnimationShader and OverrideOverlayShader) — bound to
+    // `_activeShaderParamSchema`, which selects the matching registry's schema
+    // per action type. The action stores a nested `params` object (the shader
+    // uniform values);
     // changing any value rewrites the whole object. Locks live on the row
     // as working state (not persisted) — exactly like the per-event card on
     // the animations page. Randomize rolls a new map respecting locks and
@@ -130,6 +187,10 @@ ColumnLayout {
     // The validator accepts the `#AARRGGBB` shape and the effect-side consumer
     // parses it via `QColor(QString)` (which reads 9-digit hex alpha-first).
     property Component _colorParamEditor
+    // Comma/space/range-separated zone-number input for `kind == "zoneOrdinals"`
+    // (SnapToZone). Stores a JSON array of 1-based ordinals; multiple ordinals
+    // span their combined area. Accepts "1, 2", "1;2", "1 2", and ranges "1-3".
+    property Component _zoneOrdinalsEditor
 
     /// Encode a QML color to a `#AARRGGBB` wire string (alpha-first) — the form
     /// the SetBorderColor validator accepts and the consumer parses back via
@@ -211,7 +272,7 @@ ColumnLayout {
         function onActionEdited(updated) {
             // Compare against the action BEFORE the edit lands — `row.action`
             // is still the previous state until the parent re-feeds us.
-            if (row.action.type === "overrideAnimationShader" && updated && updated.effectId !== row.action.effectId && shaderParamsLoader.item)
+            if ((row.action.type === "overrideAnimationShader" || row.action.type === "overrideOverlayShader") && updated && updated.effectId !== row.action.effectId && shaderParamsLoader.item)
                 shaderParamsLoader.item.lockedParams = ({});
         }
 
@@ -336,6 +397,9 @@ ColumnLayout {
                     if (modelData.kind === "shaderEffect")
                         return row._shaderEffectEditor;
 
+                    if (modelData.kind === "overlayShader")
+                        return row._overlayShaderEditor;
+
                     if (modelData.kind === "curveEditor")
                         return row._curveEditorEditor;
 
@@ -344,6 +408,9 @@ ColumnLayout {
 
                     if (modelData.kind === "color")
                         return row._colorParamEditor;
+
+                    if (modelData.kind === "zoneOrdinals")
+                        return row._zoneOrdinalsEditor;
 
                     return row._stringParamEditor;
                 }
@@ -360,17 +427,35 @@ ColumnLayout {
         }
     }
 
-    // ── Bottom: shader-parameter editor for OverrideAnimationShader ──────
-    // Surfaces when the action type is `overrideAnimationShader`, the user
-    // has picked an effect, and that effect declares parameters. Matches the
-    // per-event editor on the animation settings page so users can tweak
-    // uniforms without leaving the rule editor.
+    // ── Input-format hint for the current params ─────────────────────────────
+    // A muted helper line under the editor row, shown only when a param carries
+    // a `hint` (e.g. SnapToZone's zone-ordinal syntax). Indented to align under
+    // the editors, mirroring the shader-parameter editor's left margin. Plain
+    // text, word-wrapped; never interactive.
+    Label {
+        Layout.fillWidth: true
+        Layout.leftMargin: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing
+        visible: row._paramHint.length > 0
+        text: row._paramHint
+        font: Kirigami.Theme.smallFont
+        color: Kirigami.Theme.disabledTextColor
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        Accessible.ignored: true
+    }
+
+    // ── Bottom: shader-parameter editor for the shader-override actions ──────
+    // Surfaces when the action type is `overrideAnimationShader` or
+    // `overrideOverlayShader`, the user has picked an effect, and that effect
+    // declares parameters (`_activeShaderParamSchema` resolves the right
+    // registry's schema). Matches the per-event editor on the animation settings
+    // page so users can tweak uniforms without leaving the rule editor.
     Loader {
         id: shaderParamsLoader
 
         Layout.fillWidth: true
         Layout.leftMargin: Kirigami.Units.iconSizes.small + Kirigami.Units.smallSpacing
-        active: row.action.type === "overrideAnimationShader" && row._shaderParamSchema.length > 0
+        active: row._activeShaderParamSchema.length > 0
         visible: active
         sourceComponent: row._shaderParamsEditor
     }
@@ -383,6 +468,77 @@ ColumnLayout {
             placeholderText: _param.label
             Accessible.name: _param.label
             onEditingFinished: row.actionEdited(row._withParam(_param.key, text))
+        }
+    }
+
+    _zoneOrdinalsEditor: Component {
+        TextField {
+            readonly property var _param: parent.modelData
+            readonly property var _zones: Array.isArray(row.action[_param.key]) ? row.action[_param.key] : []
+
+            // Normalised display (sorted, deduped) re-binds after each edit.
+            text: _zones.join(", ")
+            placeholderText: i18nc("@info:placeholder zone numbers for a snap-to-zone rule", "e.g. 1, 2 or 1-2")
+            Accessible.name: _param.label
+            Accessible.description: i18nc("@info:whatsthis", "One or more 1-based zone numbers to snap matched windows to. Multiple zones span their combined area.")
+            onEditingFinished: {
+                // Parse comma/semicolon/space-separated ordinals and "lo-hi"
+                // ranges into a deduped, ascending array of 1-based integers.
+                var seen = ({});
+                var parsed = [];
+                var tokens = text.split(/[,;\s]+/);
+                for (var i = 0; i < tokens.length; i++) {
+                    var t = tokens[i].trim();
+                    if (t.length === 0)
+                        continue;
+                    var range = t.match(/^(\d+)-(\d+)$/);
+                    if (range) {
+                        var lo = parseInt(range[1], 10);
+                        var hi = parseInt(range[2], 10);
+                        // Clamp the upper bound to the SnapToZone ordinal cap
+                        // (MaxZoneOrdinal = 64 in RuleAction.h). An unbounded
+                        // expansion (e.g. "1-100000") would build a huge array on
+                        // the UI thread and freeze it; ordinals past the cap are
+                        // rejected by the validator anyway.
+                        if (hi > 64)
+                            hi = 64;
+                        if (lo >= 1 && hi >= lo) {
+                            for (var z = lo; z <= hi; z++) {
+                                if (!seen[z]) {
+                                    seen[z] = true;
+                                    parsed.push(z);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if (/^\d+$/.test(t)) {
+                        var n = parseInt(t, 10);
+                        if (n >= 1 && !seen[n]) {
+                            seen[n] = true;
+                            parsed.push(n);
+                        }
+                    }
+                }
+                parsed.sort(function (a, b) {
+                    return a - b;
+                });
+                // A SnapToZone action requires a non-empty ordinal list (the
+                // descriptor validator rejects []). If the user cleared the field
+                // or typed only invalid tokens, keep the last valid value rather
+                // than committing an empty list — that would produce an action the
+                // validator drops on save, silently losing the rule with the Save
+                // button still enabled. Restore via Qt.binding (not a bare
+                // `text = ...`) so the declarative `text: _zones.join(", ")`
+                // binding survives and keeps normalising on later edits.
+                if (parsed.length === 0) {
+                    text = Qt.binding(function () {
+                        return _zones.join(", ");
+                    });
+                    return;
+                }
+                row.actionEdited(row._withParam(_param.key, parsed));
+            }
         }
     }
 
@@ -548,9 +704,21 @@ ColumnLayout {
     }
 
     _animationEventEditor: Component {
-        WideComboBox {
+        // Categorized event picker — the shared cascading category-menu button
+        // (PZCommon.CategoryMenuButton), grouping the events by their section
+        // (Window / Editor / Overlays / …) into submenus instead of the long
+        // flat "Section · Event" combo. The read-only rule row still renders the
+        // full "Section · Event" label (see ActionListView._resolveParamValue).
+        PZCommon.CategoryMenuButton {
             readonly property var _param: parent.modelData
-            readonly property var _events: {
+
+            // Map eventSections() into the picker's `{ id, name, category,
+            // categoryOrder }` shape: one item per leaf event, grouped under its
+            // section. `categoryOrder` preserves the section order (Window,
+            // Editor, Overlays, …); within a section the component sorts events
+            // by name. An unknown/custom stored path renders as "(missing: …)"
+            // rather than collapsing the picker, mirroring the prior fallback.
+            items: {
                 var controller = row.appSettings ? row.appSettings.animationsController : null;
                 if (!controller)
                     return [];
@@ -568,31 +736,20 @@ ColumnLayout {
                             continue;
 
                         out.push({
-                            "value": entry.path,
-                            "label": section.label + " · " + entry.label
+                            "id": entry.path,
+                            "name": entry.label,
+                            "category": section.label,
+                            "categoryOrder": s
                         });
                     }
                 }
                 return out;
             }
-
-            model: _events
-            textRole: "label"
-            valueRole: "value"
-            currentIndex: {
-                var target = row.action[_param.key];
-                for (var i = 0; i < _events.length; ++i) {
-                    if (_events[i].value === target)
-                        return i;
-                }
-                return -1;
-            }
-            // Fall back to the raw event path so a custom (non-built-in) path
-            // stays visible rather than collapsing the picker to a blank.
-            displayText: currentIndex >= 0 ? currentText : (row.action[_param.key] || i18n("Choose an event…"))
-            Accessible.name: _param.label
-            onActivated: function (index) {
-                row.actionEdited(row._withParam(_param.key, currentValue));
+            currentId: row.action[_param.key] || ""
+            placeholderText: i18n("Choose an event…")
+            Accessible.description: _param.label
+            onSelected: function (value) {
+                row.actionEdited(row._withParam(_param.key, value));
             }
         }
     }
@@ -660,28 +817,59 @@ ColumnLayout {
     }
 
     _shaderEffectEditor: Component {
-        WideComboBox {
+        // Cascading category menu (same widget as the action-type picker above
+        // and the animations page's shader picker) instead of a flat combo, so
+        // shaders group by category. The list is path-aware: each effect
+        // carries `dimmed`/`dimReason` for this action's target event, so a
+        // geometry-only shader (window-morph) is greyed out with a warning
+        // tooltip on a show/hide event — matching the animations page and the
+        // WHEN/THEN pickers in this same editor.
+        PZCommon.CategoryMenuButton {
             readonly property var _param: parent.modelData
+            // Reading `row.action.event` makes the dim state re-evaluate when
+            // the user changes the action's target event. Empty event → the
+            // controller leaves every shader compatible (nothing to dim yet).
             readonly property var _effects: {
                 var controller = row.appSettings ? row.appSettings.animationsController : null;
-                return controller ? controller.availableShaderEffects() : [];
+                if (!controller)
+                    return [];
+
+                return controller.availableShaderEffectsForPath(row.action.event || "");
             }
 
-            model: _effects
-            textRole: "name"
-            valueRole: "id"
-            currentIndex: {
-                var target = row.action[_param.key];
-                for (var i = 0; i < _effects.length; ++i) {
-                    if (_effects[i].id === target)
-                        return i;
-                }
-                return -1;
+            items: _effects
+            currentId: row.action[_param.key] || ""
+            // CategoryMenuButton renders "(missing: <id>)" on its own for a
+            // stale / uninstalled shader id, so the placeholder is only seen
+            // when nothing is selected.
+            placeholderText: i18n("Choose a shader…")
+            Accessible.description: _param.label
+            onSelected: function (id) {
+                row.actionEdited(row._withParam(_param.key, id));
             }
-            displayText: currentIndex >= 0 ? currentText : (row.action[_param.key] || i18n("Choose a shader…"))
-            Accessible.name: _param.label
-            onActivated: function (index) {
-                row.actionEdited(row._withParam(_param.key, currentValue));
+        }
+    }
+
+    _overlayShaderEditor: Component {
+        // Cascading category menu of the overlay/snapping shaders — the same
+        // registry the "Snapping → Shaders" page edits and that Layout::shaderId
+        // stores — grouped by category. Distinct from _shaderEffectEditor, which
+        // lists the ANIMATION shaders. No path-aware dim/incompatible state here
+        // (overlay shaders are event-agnostic, unlike the per-event animation
+        // shaders). Wire value is the shader id; an unknown/uninstalled id
+        // renders as "(missing: <id>)".
+        PZCommon.CategoryMenuButton {
+            readonly property var _param: parent.modelData
+
+            items: {
+                var controller = row.appSettings ? row.appSettings.snappingShadersPage : null;
+                return controller ? controller.availableShaderEffects() : [];
+            }
+            currentId: row.action[_param.key] || ""
+            placeholderText: i18n("Choose an overlay shader…")
+            Accessible.description: _param.label
+            onSelected: function (id) {
+                row.actionEdited(row._withParam(_param.key, id));
             }
         }
     }
@@ -690,7 +878,7 @@ ColumnLayout {
         PZCommon.ShaderParamsEditor {
             id: paramEditor
 
-            parameters: row._shaderParamSchema
+            parameters: row._activeShaderParamSchema
             currentValues: row.action.params || row._emptyShaderParams
             effectId: row.action.effectId || ""
             enableLocking: true

@@ -21,6 +21,7 @@
 
 #include <effect/effecthandler.h>
 #include <core/output.h>
+#include <virtualdesktops.h>
 #include <window.h>
 #include <workspace.h>
 
@@ -211,6 +212,23 @@ void PlasmaZonesEffect::continueDaemonReadySetup()
         qCDebug(lcEffect) << "Re-sent cursor screen (physical fallback):" << cursorScreenId;
     }
 
+    // Re-sync each output's current virtual desktop (Plasma 6.7 per-output virtual
+    // desktops, #648). The daemon may have just (re)registered with an empty
+    // per-screen map, so push the authoritative value for every screen — bypassing
+    // reportScreenDesktop's dedup — and refresh the dedup cache to match.
+    for (auto* output : KWin::effects->screens()) {
+        auto* vd = KWin::effects->currentDesktop(output);
+        if (!vd) {
+            continue;
+        }
+        const QString screenId = outputScreenId(output);
+        const int desktop = static_cast<int>(vd->x11DesktopNumber());
+        m_lastScreenDesktop.insert(screenId, desktop);
+        PhosphorProtocol::ClientHelpers::fireAndForget(this, PhosphorProtocol::Service::Interface::WindowTracking,
+                                                       QStringLiteral("screenDesktopChanged"), {screenId, desktop});
+        qCDebug(lcEffect) << "Re-sent screen desktop:" << screenId << "->" << desktop;
+    }
+
     // Re-notify active window (gives daemon lastActiveScreenName).
     // Use notifyWindowActivated which bypasses user exclusion lists — the daemon
     // must always know which window is active for correct shortcut handling.
@@ -254,9 +272,19 @@ void PlasmaZonesEffect::continueDaemonReadySetup()
                     m_navigationHandler->setWindowFloating(id, true);
                 }
                 qCDebug(lcEffect) << "Synced" << floatingIds.size() << "floating windows from daemon";
+                // Re-seeding the float cache changes the IsFloating match input for
+                // these windows; drop the stale placement-scoped opacity verdicts so
+                // a `WHEN isFloating` SetOpacity rule re-resolves against the fresh
+                // state on the next frame (mirrors the daemon-loss invalidation).
+                invalidateAllRuleCaches();
             }
         });
     }
+
+    // Repopulate the snap-zone cache from the daemon's authoritative state so
+    // windows snapped before this effect / daemon started are matchable by the
+    // IsSnapped / Zone rule fields without waiting for their next state change.
+    m_navigationHandler->syncZonesFromDaemon();
 
     // One-shot WindowRules subscription. The daemon emits rulesChanged per
     // per-rule mutation; slotWindowRulesChanged debounces via a 50ms timer to
@@ -488,7 +516,7 @@ void PlasmaZonesEffect::processDaemonReadyWindowState()
                     continue;
                 }
                 // Snapshot geometry before the async call; if it changes after
-                // applySnapGeometry, we know a moveResize happened.
+                // applyWindowGeometry, we know a moveResize happened.
                 QRectF geoBefore = safeWindow->frameGeometry();
 
                 m_snapHandler->callResolveWindowRestore(
@@ -828,6 +856,23 @@ void PlasmaZonesEffect::connectNavigationSignals()
                                           QStringLiteral("activateWindowRequested"), this,
                                           SLOT(slotActivateWindowRequested(QString)));
 
+    // Cross-desktop directional move: daemon re-keys its tiling state and asks
+    // the effect to move the real KWin window to the target virtual desktop.
+    QDBusConnection::sessionBus().connect(PhosphorProtocol::Service::Name, PhosphorProtocol::Service::ObjectPath,
+                                          PhosphorProtocol::Service::Interface::WindowTracking,
+                                          QStringLiteral("windowDesktopMoveRequested"), this,
+                                          SLOT(slotWindowDesktopMoveRequested(QString, int)));
+
+    // Daemon-initiated cross-output move: the daemon already migrated its
+    // tiling state and reflowed both outputs; record the window so the
+    // autotile handler's reactive outputChanged path updates bookkeeping only
+    // instead of re-issuing windowClosed/windowOpened (which would tear down
+    // the daemon's placement and strand the source monitor's reflow).
+    QDBusConnection::sessionBus().connect(PhosphorProtocol::Service::Name, PhosphorProtocol::Service::ObjectPath,
+                                          PhosphorProtocol::Service::Interface::WindowTracking,
+                                          QStringLiteral("windowOutputMoveExpected"), this,
+                                          SLOT(slotWindowOutputMoveExpected(QString, QString)));
+
     // Float toggle is entirely daemon-local: the daemon reads the active
     // window from its own shadow, calls toggleFloatForWindow internally, and
     // emits applyGeometryRequested to paint the outcome. The effect no longer
@@ -874,6 +919,14 @@ void PlasmaZonesEffect::connectNavigationSignals()
                                           PhosphorProtocol::Service::Interface::WindowTracking,
                                           QStringLiteral("windowFloatingChanged"), this,
                                           SLOT(slotWindowFloatingChanged(QString, bool, QString)));
+
+    // Snap-zone state sync — feeds the effect-side zone cache the IsSnapped /
+    // Zone rule-match fields read. Carries the per-window WindowStateEntry
+    // (zoneId / changeType) on every snap / unsnap / float / screen-change.
+    QDBusConnection::sessionBus().connect(PhosphorProtocol::Service::Name, PhosphorProtocol::Service::ObjectPath,
+                                          PhosphorProtocol::Service::Interface::WindowTracking,
+                                          QStringLiteral("windowStateChanged"), this,
+                                          SLOT(slotWindowStateChanged(QString, PhosphorProtocol::WindowStateEntry)));
 
     // Settings: window picker for KCM exclusion list
     QDBusConnection::sessionBus().connect(PhosphorProtocol::Service::Name, PhosphorProtocol::Service::ObjectPath,

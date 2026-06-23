@@ -426,6 +426,8 @@ Item {
             // ── Inheritance info ──────────────────────────────────────
             Kirigami.InlineMessage {
                 Layout.fillWidth: true
+                Layout.leftMargin: Kirigami.Units.largeSpacing
+                Layout.rightMargin: Kirigami.Units.largeSpacing
                 type: Kirigami.MessageType.Information
                 visible: !root.alwaysEnabled && (root.isParentNode ? root.overrideEnabled : !root.overrideEnabled)
                 text: {
@@ -453,6 +455,8 @@ Item {
             // each shadowing leaf manually and clear its override.
             Kirigami.InlineMessage {
                 Layout.fillWidth: true
+                Layout.leftMargin: Kirigami.Units.largeSpacing
+                Layout.rightMargin: Kirigami.Units.largeSpacing
                 type: Kirigami.MessageType.Warning
                 visible: root.isParentNode && root._shadowingChildrenCount > 0
                 text: i18np("%n descendant event has a shader override that shadows this parent.", "%n descendant events have shader overrides that shadow this parent.", root._shadowingChildrenCount)
@@ -468,6 +472,11 @@ Item {
             }
 
             Label {
+                Layout.fillWidth: true
+                // Inset to match the rows / banners in this card instead of
+                // hugging the left edge.
+                Layout.leftMargin: Kirigami.Units.largeSpacing
+                Layout.rightMargin: Kirigami.Units.largeSpacing
                 visible: !root.alwaysEnabled && !root.overrideEnabled
                 text: i18n("Current: %1", root.inheritSummaryText())
                 font.italic: true
@@ -504,9 +513,14 @@ Item {
                 // Picker model fed via the registry-tick dependency
                 // so the binding re-evaluates on
                 // `shaderEffectsChanged`.
+                // Path-aware list: each effect carries `dimmed`/`dimReason`
+                // for this event, so the category picker greys out shaders
+                // that can't drive this row (e.g. the geometry-only
+                // window-morph on a show/hide event) with a warning tooltip —
+                // the same affordance the window-rule action picker uses.
                 availableShaders: {
                     void (root._shaderRegistryRev);
-                    return settingsController.animationsPage.availableShaderEffects();
+                    return settingsController.animationsPage.availableShaderEffectsForPath(root.eventPath);
                 }
                 // Parameter schema for the picked shader, fed in the same
                 // registry-tick-bound way so the editor doesn't reach the

@@ -34,6 +34,7 @@ add_library(PhosphorSnapEngine SHARED
     src/lifecycle.cpp
     src/navigation.cpp
     src/navigation_actions.cpp
+    src/navigation_crosssurface.cpp
     src/resnap_calc.cpp
     src/snapnavigationtargets.cpp
     src/snapenginelogging.h
@@ -67,7 +68,7 @@ target_link_libraries(PhosphorSnapEngine
     PRIVATE
         PhosphorScreens::Runtime  # SnapEngine queries screen geometry via ScreenManager
         PhosphorIdentity::PhosphorIdentity
-        PhosphorWindowRule::PhosphorWindowRule
+        PhosphorWindowRules::PhosphorWindowRules
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════

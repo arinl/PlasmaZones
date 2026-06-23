@@ -20,8 +20,8 @@
 #include <PhosphorSurface/SurfaceShaderContract.h>
 #include <PhosphorSurface/SurfaceShaderRegistry.h>
 
-#include <PhosphorWindowRule/RuleEvaluator.h>
-#include <PhosphorWindowRule/WindowRuleSet.h>
+#include <PhosphorWindowRules/RuleEvaluator.h>
+#include <PhosphorWindowRules/WindowRuleSet.h>
 #include <effect/effect.h>
 #include <effect/effecthandler.h>
 #include <effect/effectwindow.h>
@@ -128,10 +128,12 @@ public:
     void reconfigure(ReconfigureFlags flags) override;
     bool isActive() const override;
 
-    void prePaintScreen(KWin::ScreenPrePaintData& data, std::chrono::milliseconds presentTime) override;
+    // KWin 6.7 dropped the explicit presentTime parameter from the prePaint
+    // hooks; effects now self-source time (our CompositorClock samples
+    // std::chrono::steady_clock, matching KWin's own AnimationEffect clock).
+    void prePaintScreen(KWin::ScreenPrePaintData& data) override;
     void postPaintScreen() override;
-    void prePaintWindow(KWin::RenderView* view, KWin::EffectWindow* w, KWin::WindowPrePaintData& data,
-                        std::chrono::milliseconds presentTime) override;
+    void prePaintWindow(KWin::RenderView* view, KWin::EffectWindow* w, KWin::WindowPrePaintData& data) override;
     // paintScreen override removed — per-window borders are rendered by routing
     // the redirected window through the offscreen border MapTexture shader (see
     // the drawWindow override below + borders.cpp); no separate paintScreen-level
@@ -182,6 +184,8 @@ private Q_SLOTS:
     void slotApplyGeometryRequested(const QString& windowId, int x, int y, int width, int height, const QString& zoneId,
                                     const QString& screenId, bool sizeOnly);
     void slotActivateWindowRequested(const QString& windowId);
+    void slotWindowDesktopMoveRequested(const QString& windowId, int desktop);
+    void slotWindowOutputMoveExpected(const QString& windowId, const QString& targetScreenId);
 
     // Float toggle is entirely daemon-local — no effect-side slot needed.
 
@@ -197,6 +201,7 @@ private Q_SLOTS:
     void slotRaiseWindowsRequested(const QStringList& windowIds);
 
     void slotWindowFloatingChanged(const QString& windowId, bool isFloating, const QString& screenId);
+    void slotWindowStateChanged(const QString& windowId, const PhosphorProtocol::WindowStateEntry& state);
     void slotRunningWindowsRequested();
     void slotRestoreSizeDuringDrag(const QString& windowId, int width, int height);
 
@@ -262,8 +267,18 @@ private:
      * Safe to call unconditionally on every observation — the daemon de-dupes.
      * Called from slotWindowAdded for initial registration, and from
      * windowClassChanged / desktopFileNameChanged handlers for live updates.
+     *
+     * @param includeExtended When false, the extended-property snapshot (the
+     * trailing a{sv}: state flags, geometry, accessory flags, captionNormal) is
+     * NOT rebuilt or sent — the daemon preserves whatever it already has. Used by
+     * the captionChanged handler: terminals/browsers rewrite their title every
+     * frame, and the rule-relevant extended fields don't change on a title tick,
+     * so rebuilding/marshalling a ~20-entry map per frame is pure waste. The
+     * extended snapshot is captured at window-open and refreshed on identity
+     * changes (class/desktop/activity), which is when it matters for the daemon's
+     * open-path Float / RestorePosition resolvers.
      */
-    void pushWindowMetadata(KWin::EffectWindow* w);
+    void pushWindowMetadata(KWin::EffectWindow* w, bool includeExtended = true);
 
     /**
      * @brief Snapping/zone-management window filter.
@@ -455,6 +470,28 @@ private:
      * @return true if window is floating
      */
     bool isWindowFloating(const QString& windowId) const;
+    /// True iff @p windowId is snapped into a zone (snap mode; delegates to the
+    /// NavigationHandler zone cache). Autotile tiles carry no zone and are not
+    /// snapped under this definition.
+    bool isWindowSnapped(const QString& windowId) const;
+    /// The snap-zone UUID @p windowId occupies, or empty when it occupies none.
+    QString zoneForWindow(const QString& windowId) const;
+    /// Build a window-rule match query for @p w with the effect's runtime
+    /// placement state (floating / snapped / zone) threaded into the free
+    /// `windowRuleQueryFor` builder. Use this at EVERY rule-evaluation site so
+    /// IsFloating / IsSnapped / Zone resolve uniformly; the free builder stays
+    /// KWin-only and can't reach the effect's caches.
+    PhosphorWindowRules::WindowQuery windowRuleQuery(KWin::EffectWindow* w) const;
+
+    /// Resolve the animation rule-action verdict for @p w, skipping the per-frame
+    /// `windowRuleQuery(w)` build (≈30 KWin accessor reads) when the evaluator
+    /// already has a cached verdict for @p windowId. Peek-then-build: a cache hit
+    /// returns the memoised actions directly; a miss builds the query and resolves
+    /// (caching the result). An empty windowId or a windowless query yields empty
+    /// actions (no slots) WITHOUT caching, matching the resolvers' old
+    /// short-circuit (avoids churning the cache for sub-surfaces / proxies). The
+    /// per-frame opacity / border resolvers consume the returned ResolvedActions.
+    PhosphorWindowRules::ResolvedActions resolveWindowRuleActions(KWin::EffectWindow* w, const QString& windowId) const;
 
     /**
      * @brief True if the window is currently snap-managed (tiled into a snap zone).
@@ -490,6 +527,10 @@ private:
      * when EDID fields are empty.
      */
     QString outputScreenId(const KWin::LogicalOutput* output) const;
+    /// Report a screen's current virtual desktop to the daemon (Plasma 6.7
+    /// per-output virtual desktops). Deduplicates against m_lastScreenDesktop and
+    /// only fires when the daemon service is registered.
+    void reportScreenDesktop(const QString& screenId, int desktop);
     QString getWindowScreenId(KWin::EffectWindow* w) const;
     AutotileHandler* autotileHandler() const
     {
@@ -513,18 +554,20 @@ private:
                                 const QString& sourceZoneId = QString(), const QString& targetZoneId = QString(),
                                 const QString& screenId = QString());
 
-    // Apply snap geometry to window.
+    // Move a window to a target geometry, running the configured placement
+    // transition (snap / tile / move). Shared chokepoint for snap zones,
+    // autotile tiles, and float restores — not snap-specific despite history.
     // When allowDuringDrag is true, applies immediately even if window is in user move state (snap-on-hover).
     // When false and the window is being dragged, defers via windowFinishUserMovedResized signal.
     //
     // profilePath drives the shader-transition resolve (see ShaderProfileTree). This used to be
-    // hardcoded to "window.snapIn" inside applySnapGeometry, which fired the same shader for every
+    // hardcoded to "window.snapIn" inside applyWindowGeometry, which fired the same shader for every
     // motion that flowed through this chokepoint — snap-in, snap-out, resnap, resize, restore, etc.
     // Callers now pass the logical event path so the shader tree can route each one independently.
     // Default is WindowSnapIn (the kwin-effect's default snap-into-zone window animation).
-    void applySnapGeometry(KWin::EffectWindow* window, const QRect& geometry, bool allowDuringDrag = false,
-                           bool skipAnimation = false,
-                           const QString& profilePath = PhosphorAnimation::ProfilePaths::WindowSnapIn);
+    void applyWindowGeometry(KWin::EffectWindow* window, const QRect& geometry, bool allowDuringDrag = false,
+                             bool skipAnimation = false,
+                             const QString& profilePath = PhosphorAnimation::ProfilePaths::WindowSnapIn);
     void repaintSnapRegions(KWin::EffectWindow* window, const QRectF& oldFrame, const QRect& newGeo);
 
     // Async D-Bus helper for 5-arg snap replies (x, y, w, h, shouldSnap).
@@ -664,6 +707,17 @@ private:
     /// Defined in borders.cpp with the rest of the decoration code; called
     /// once from the constructor.
     void setupDecorationManager();
+
+    // Interactive-resize latch. windowStartUserMovedResized fires once with
+    // isUserResize() true when an edge drag begins; we capture the pre-resize
+    // frame so windowFinishUserMovedResized can report the before/after geometry
+    // to the daemon for neighbour reflow (GitHub #652). The resize-vs-move
+    // identity is the existing m_resizingWindow latch; this carries only the
+    // baseline geometry it lacks. The daemon's frame shadow can't serve as the
+    // baseline — it updates mid-drag via the debounced setFrameGeometry push.
+    QRect m_resizeStartGeometry;
+    void notifyWindowResized(KWin::EffectWindow* w, const QRect& oldGeometry);
+
     void updateWindowBorder(const QString& windowId, KWin::EffectWindow* w);
     void removeWindowBorder(const QString& windowId);
     void updateAllBorders();
@@ -856,6 +910,34 @@ private:
     /// corrected the instant the fetch lands.
     void seedDecorationTreeBaseline();
 
+    /// Drop the per-window rule match cache and refresh @p windowId's border /
+    /// opacity after its placement state (snapped / floating / zone) changed.
+    /// Those are rule MATCH inputs now, so without this a window stays resolved
+    /// at its prior state (e.g. a `WHEN isSnapped` border never reverting on
+    /// unsnap). Mirrors slotWindowActivated's focus invalidation; no-op when
+    /// there are no animation rules.
+    void invalidateRuleCacheForStateChange(const QString& windowId);
+
+    /// Bulk analog of invalidateRuleCacheForStateChange for placement changes that
+    /// affect EVERY window at once — daemon loss (the zone / floating caches are
+    /// cleared) and the daemon-ready re-seed (they are repopulated). The match
+    /// cache is keyed (windowId, ruleSet revision); neither moves on a bulk
+    /// placement change, so a placement-scoped opacity verdict would otherwise
+    /// stay cached (e.g. a `WHEN isSnapped` SetOpacity window staying dimmed after
+    /// the cache that made it "snapped" was cleared). Drops the whole match cache
+    /// and forces a full repaint so opacity rules re-resolve against the current
+    /// IsSnapped / IsFloating / Zone state. Borders recover via their own
+    /// restore / rebuild path. No-op when there are no animation rules.
+    void invalidateAllRuleCaches();
+
+    /// Flush coalesced per-window rule-cache invalidations queued by
+    /// invalidateRuleCacheForStateChange within one event-loop turn: drops the
+    /// match cache once and re-resolves the border / opacity of each affected
+    /// window. Posted via a queued single-shot so a float toggle (which emits
+    /// both windowFloatingChanged AND windowStateChanged) clears the cache once
+    /// instead of twice.
+    void flushPendingRuleInvalidations();
+
     /// Resolve the per-window-rule SetHideTitleBar override for @p windowId
     /// and forward it to the DecorationManager as a tri-state rule override
     /// (unset = mode decides, true = rule hides, false = force-show veto).
@@ -1015,12 +1097,12 @@ private:
     // unified WindowRule store the effect mirrors over D-Bus. Filled by
     // loadWindowRuleAnimationsFromDbus's parse step (which already
     // deserialises the full rule set for the animation override path),
-    // via `PhosphorWindowRule::ExclusionRules::excludeRulesFrom`. The
+    // via `PhosphorWindowRules::ExclusionRules::excludeRulesFrom`. The
     // bound RuleEvaluator drives shouldHandleWindow()'s exclusion gate.
     // Declaration ORDER MATTERS — the rule set must precede (and outlive)
     // the evaluator that binds a reference to it.
-    PhosphorWindowRule::WindowRuleSet m_snappingExclusionRuleSet;
-    PhosphorWindowRule::RuleEvaluator m_snappingExclusionEvaluator{m_snappingExclusionRuleSet};
+    PhosphorWindowRules::WindowRuleSet m_snappingExclusionRuleSet;
+    PhosphorWindowRules::RuleEvaluator m_snappingExclusionEvaluator{m_snappingExclusionRuleSet};
 
     // Minimum window size for autotile eligibility. Windows smaller than this
     // are rejected by isEligibleForAutotileNotify() to prevent small utility
@@ -1059,12 +1141,12 @@ private:
     // Filled by loadWindowRuleAnimationsFromDbus's parse step (which
     // already deserialises the full rule set for the animation override
     // path), via
-    // `PhosphorWindowRule::ExclusionRules::excludeAnimationsRulesFrom`.
+    // `PhosphorWindowRules::ExclusionRules::excludeAnimationsRulesFrom`.
     // The bound RuleEvaluator drives shouldAnimateWindow()'s exclusion
     // gate. Declaration ORDER MATTERS — the rule set must precede (and
     // outlive) the evaluator that binds a reference to it.
-    PhosphorWindowRule::WindowRuleSet m_animationExclusionRuleSet;
-    PhosphorWindowRule::RuleEvaluator m_animationExclusionEvaluator{m_animationExclusionRuleSet};
+    PhosphorWindowRules::WindowRuleSet m_animationExclusionRuleSet;
+    PhosphorWindowRules::RuleEvaluator m_animationExclusionEvaluator{m_animationExclusionRuleSet};
 
     // Autotile: true when the current drag was started on an autotile screen
     // (callDragStarted was skipped). Captured at drag start so the drag end
@@ -1124,6 +1206,11 @@ private:
     // Entries are consumed (removed) when slotApplyGeometryRequested skips
     // the geometry restore for a drag-floated window.
     QSet<QString> m_dragFloatedWindowIds;
+
+    // Per-window rule-cache invalidations accumulated within one event-loop turn,
+    // flushed once by flushPendingRuleInvalidations(). Coalesces the double
+    // invalidation a float toggle triggers (windowFloatingChanged + windowStateChanged).
+    QSet<QString> m_pendingRuleInvalidations;
 
     // Cached daemon D-Bus service registration state.
     // Updated via QDBusServiceWatcher signals (registration/unregistration) to avoid
@@ -1196,6 +1283,9 @@ private:
     // Stores the connector name of the last output the cursor was on.
     // Used for deduplication only — the actual D-Bus call sends the EDID screen ID.
     QString m_lastCursorOutput;
+    // Per-screen current virtual desktop last reported to the daemon (physical
+    // screenId → 1-based desktop), for dedup of KWin's per-output desktopChanged.
+    QHash<QString, int> m_lastScreenDesktop;
 
     // Last effective screen ID reported to daemon (physical or virtual).
     // Used for deduplication of cursorScreenChanged D-Bus calls when virtual

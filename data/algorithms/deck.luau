@@ -7,7 +7,7 @@ return pluau.algorithm {
     metadata = {
         name = "Deck",
         id = "deck",
-        description = "Focused window takes the left portion; remaining windows peek from the right edge. Ratio controls focused window width",
+        description = "Focused window takes the left portion. Remaining windows peek from the right edge. Ratio controls focused window width",
         producesOverlappingZones = true,
         supportsMasterCount = false,
         supportsSplitRatio = true,
@@ -24,5 +24,20 @@ return pluau.algorithm {
         if count <= 0 then return {} end
         local splitRatio = pluau.clampSplitRatio(ctx.splitRatio)
         return pluau.deckLayout(ctx.area, count, splitRatio, false)
+    end,
+
+    -- Reflow on interactive resize: the focused window's width is the split ratio.
+    -- Only its right edge maps to the ratio; the peek windows are derived and can't
+    -- be resized independently, so they no-op.
+    onWindowResized = function(state, resize)
+        local count = state.windowCount
+        if count <= 1 then return nil end
+        local oldRatio = state.splitRatio
+        local old, new, edges, idx = resize.oldRect, resize.newRect, resize.edges, resize.index
+        if old.width <= 0 or oldRatio <= 0 then return nil end
+        if idx == 0 and edges.right then
+            return { splitRatio = new.width * oldRatio / old.width }
+        end
+        return nil
     end,
 }

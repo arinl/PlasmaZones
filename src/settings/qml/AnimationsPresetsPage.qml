@@ -110,6 +110,7 @@ SettingsFlickable {
         SettingsCard {
             Layout.fillWidth: true
             headerText: i18n("Easing Presets")
+            searchAnchor: "easingPresets"
             collapsible: true
 
             contentItem: ColumnLayout {
@@ -122,6 +123,9 @@ SettingsFlickable {
                     delegate: RowLayout {
                         required property var modelData
 
+                        Layout.fillWidth: true
+                        Layout.leftMargin: Kirigami.Units.largeSpacing
+                        Layout.rightMargin: Kirigami.Units.largeSpacing
                         spacing: Kirigami.Units.smallSpacing
 
                         CurveThumbnail {
@@ -163,6 +167,9 @@ SettingsFlickable {
                     delegate: RowLayout {
                         required property var modelData
 
+                        Layout.fillWidth: true
+                        Layout.leftMargin: Kirigami.Units.largeSpacing
+                        Layout.rightMargin: Kirigami.Units.largeSpacing
                         spacing: Kirigami.Units.smallSpacing
 
                         CurveThumbnail {
@@ -230,6 +237,8 @@ SettingsFlickable {
                     color: Kirigami.Theme.disabledTextColor
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing
+                    Layout.rightMargin: Kirigami.Units.largeSpacing
                     font.italic: true
                 }
             }
@@ -239,6 +248,7 @@ SettingsFlickable {
         SettingsCard {
             Layout.fillWidth: true
             headerText: i18n("Spring Presets")
+            searchAnchor: "springPresets"
             collapsible: true
 
             contentItem: ColumnLayout {
@@ -251,6 +261,9 @@ SettingsFlickable {
                     delegate: RowLayout {
                         required property var modelData
 
+                        Layout.fillWidth: true
+                        Layout.leftMargin: Kirigami.Units.largeSpacing
+                        Layout.rightMargin: Kirigami.Units.largeSpacing
                         spacing: Kirigami.Units.smallSpacing
 
                         CurveThumbnail {
@@ -297,6 +310,9 @@ SettingsFlickable {
                         required property var modelData
                         readonly property var _spring: root.parseSpring(modelData.curve)
 
+                        Layout.fillWidth: true
+                        Layout.leftMargin: Kirigami.Units.largeSpacing
+                        Layout.rightMargin: Kirigami.Units.largeSpacing
                         spacing: Kirigami.Units.smallSpacing
 
                         CurveThumbnail {
@@ -362,6 +378,8 @@ SettingsFlickable {
                     color: Kirigami.Theme.disabledTextColor
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing
+                    Layout.rightMargin: Kirigami.Units.largeSpacing
                     font.italic: true
                 }
             }

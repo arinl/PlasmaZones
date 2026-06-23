@@ -177,6 +177,12 @@ ColumnLayout {
         // Curve summary row: thumbnail + description + Customize…
         RowLayout {
             Layout.fillWidth: true
+            // Inset the curve-summary row (thumbnail + description + Customize…)
+            // to match the SettingsRows below, which self-inset by largeSpacing.
+            // Without it the thumbnail hugs the left edge and the Customize button
+            // the right edge of the card.
+            Layout.leftMargin: Kirigami.Units.largeSpacing
+            Layout.rightMargin: Kirigami.Units.largeSpacing
             spacing: Kirigami.Units.largeSpacing
 
             CurveThumbnail {

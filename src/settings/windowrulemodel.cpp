@@ -5,12 +5,13 @@
 
 #include "../phosphor_i18n.h"
 
-#include <PhosphorWindowRule/ContextRuleBridge.h>
-#include <PhosphorWindowRule/MatchTypes.h>
-#include <PhosphorWindowRule/RuleAction.h>
+#include <PhosphorWindowRules/ContextRuleBridge.h>
+#include <PhosphorWindowRules/MatchTypes.h>
+#include <PhosphorWindowRules/RuleAction.h>
 
 #include <PhosphorZones/AssignmentEntry.h>
 
+#include <QJsonArray>
 #include <QStringList>
 
 #include <algorithm>
@@ -19,18 +20,20 @@ namespace PlasmaZones {
 
 namespace {
 
-namespace ActionType = PhosphorWindowRule::ActionType;
-using PhosphorWindowRule::Field;
-using PhosphorWindowRule::MatchExpression;
-using PhosphorWindowRule::Operator;
-using PhosphorWindowRule::RuleAction;
-using PhosphorWindowRule::WindowRule;
+namespace ActionType = PhosphorWindowRules::ActionType;
+namespace Tag = PhosphorWindowRules::Tag;
+using PhosphorWindowRules::Field;
+using PhosphorWindowRules::MatchExpression;
+using PhosphorWindowRules::Operator;
+using PhosphorWindowRules::RuleAction;
+using PhosphorWindowRules::WindowRule;
 
-/// True if @p actions carry an OverrideAnimation* action.
+/// True if @p actions carry an OverrideAnimation* action (Animation ∩ Effect).
 bool hasAnimationAction(const QList<RuleAction>& actions)
 {
+    const auto& registry = PhosphorWindowRules::ActionRegistry::instance();
     for (const RuleAction& a : actions) {
-        if (ActionType::isAnimationOverrideAction(a.type)) {
+        if (registry.hasTag(a.type, Tag::Animation) && registry.hasTag(a.type, Tag::Effect)) {
             return true;
         }
     }
@@ -41,8 +44,9 @@ bool hasAnimationAction(const QList<RuleAction>& actions)
 /// disable / lock) — the kind a Monitor & Layout rule produces.
 bool hasContextAction(const QList<RuleAction>& actions)
 {
+    const auto& registry = PhosphorWindowRules::ActionRegistry::instance();
     for (const RuleAction& a : actions) {
-        if (ActionType::isLayoutEngineContextAction(a.type)) {
+        if (registry.hasTag(a.type, Tag::LayoutEngine)) {
             return true;
         }
     }
@@ -134,7 +138,7 @@ bool matchIsSimpleConjunction(const MatchExpression& match)
 /// "identity" so the function stays usable in code paths that have not yet
 /// wired the SettingsController-backed resolvers.
 QString leafLabel(const MatchExpression::Predicate& predicate, const WindowRuleModel::LabelLookup& screenLookup,
-                  const WindowRuleModel::LabelLookup& activityLookup)
+                  const WindowRuleModel::LabelLookup& activityLookup, const WindowRuleModel::LabelLookup& zoneLookup)
 {
     // Pick the lookup matching the leaf's field. An empty lookup degenerates
     // to identity so this stays usable from code paths that have not yet
@@ -144,6 +148,8 @@ QString leafLabel(const MatchExpression::Predicate& predicate, const WindowRuleM
         lookup = &screenLookup;
     } else if (predicate.field == Field::Activity) {
         lookup = &activityLookup;
+    } else if (predicate.field == Field::Zone) {
+        lookup = &zoneLookup;
     }
     const auto resolveOne = [lookup](const QString& raw) {
         if (!lookup || !*lookup) {
@@ -219,6 +225,7 @@ QString engineModeDisplayLabel(const QString& wire)
 QString actionLabel(const RuleAction& action, const WindowRuleModel::LabelLookup& snappingLayoutLookup,
                     const WindowRuleModel::LabelLookup& tilingAlgorithmLookup,
                     const WindowRuleModel::LabelLookup& shaderEffectLookup,
+                    const WindowRuleModel::LabelLookup& overlayShaderLookup,
                     const WindowRuleModel::LabelLookup& curveLookup)
 {
     auto resolveWith = [](const QString& wire, const WindowRuleModel::LabelLookup& lookup) {
@@ -230,17 +237,17 @@ QString actionLabel(const RuleAction& action, const WindowRuleModel::LabelLookup
     };
 
     if (action.type == ActionType::SetEngineMode) {
-        const QString mode = action.params.value(PhosphorWindowRule::ActionParam::Mode).toString();
+        const QString mode = action.params.value(PhosphorWindowRules::ActionParam::Mode).toString();
         const QString label = engineModeDisplayLabel(mode);
         return PhosphorI18n::tr("Engine: %1").arg(label.isEmpty() ? mode : label);
     }
     if (action.type == ActionType::SetSnappingLayout) {
-        const QString layoutId = action.params.value(PhosphorWindowRule::ActionParam::LayoutId).toString();
+        const QString layoutId = action.params.value(PhosphorWindowRules::ActionParam::LayoutId).toString();
         return layoutId.isEmpty() ? PhosphorI18n::tr("Snapping layout")
                                   : PhosphorI18n::tr("Snapping: %1").arg(resolveWith(layoutId, snappingLayoutLookup));
     }
     if (action.type == ActionType::SetTilingAlgorithm) {
-        const QString algo = action.params.value(PhosphorWindowRule::ActionParam::Algorithm).toString();
+        const QString algo = action.params.value(PhosphorWindowRules::ActionParam::Algorithm).toString();
         // Algorithms are wire tokens (`bsp`, `grid`, …). The dedicated
         // tilingAlgorithm lookup knows about autotile entries — the
         // WindowRuleController wires it from settingsController.layouts,
@@ -253,7 +260,7 @@ QString actionLabel(const RuleAction& action, const WindowRuleModel::LabelLookup
         // as two identical "Disabled" rows. Empty mode → fall back to
         // the generic "Disabled" label so a malformed rule still reads
         // sensibly.
-        const QString mode = action.params.value(PhosphorWindowRule::ActionParam::Mode).toString();
+        const QString mode = action.params.value(PhosphorWindowRules::ActionParam::Mode).toString();
         const QString label = engineModeDisplayLabel(mode);
         if (label.isEmpty()) {
             return PhosphorI18n::tr("Disabled");
@@ -266,12 +273,27 @@ QString actionLabel(const RuleAction& action, const WindowRuleModel::LabelLookup
     if (action.type == ActionType::Float) {
         return PhosphorI18n::tr("Float");
     }
+    if (action.type == ActionType::SnapToZone) {
+        const QJsonArray zones = action.params.value(PhosphorWindowRules::ActionParam::Zones).toArray();
+        QStringList nums;
+        nums.reserve(zones.size());
+        for (const QJsonValue& z : zones) {
+            nums.append(QString::number(z.toInt()));
+        }
+        if (nums.isEmpty()) {
+            return PhosphorI18n::tr("Snap to zone");
+        }
+        if (nums.size() == 1) {
+            return PhosphorI18n::tr("Snap to zone %1").arg(nums.first());
+        }
+        return PhosphorI18n::tr("Snap to zones %1").arg(nums.join(QStringLiteral(", ")));
+    }
     if (action.type == ActionType::SetOpacity) {
         // Mirror EVERY resolver reject path (shader_resolve.cpp's
         // resolveWindowOpacity) so the label never claims a behaviour
         // the runtime won't honour: null/undefined → label-only,
         // bool payload → "Opacity (invalid)", out-of-range value → same.
-        const QJsonValue raw = action.params.value(PhosphorWindowRule::ActionParam::Value);
+        const QJsonValue raw = action.params.value(PhosphorWindowRules::ActionParam::Value);
         if (raw.isNull() || raw.isUndefined()) {
             return PhosphorI18n::tr("Opacity");
         }
@@ -287,23 +309,38 @@ QString actionLabel(const RuleAction& action, const WindowRuleModel::LabelLookup
         return PhosphorI18n::tr("Opacity: %1%").arg(static_cast<int>(v * 100.0 + 0.5));
     }
     if (action.type == ActionType::OverrideAnimationShader) {
-        const QString id = action.params.value(PhosphorWindowRule::ActionParam::EffectId).toString();
+        const QString id = action.params.value(PhosphorWindowRules::ActionParam::EffectId).toString();
         return id.isEmpty() ? PhosphorI18n::tr("Block animation shader")
                             : PhosphorI18n::tr("Shader: %1").arg(resolveWith(id, shaderEffectLookup));
     }
     if (action.type == ActionType::OverrideAnimationTiming) {
-        const int ms = action.params.value(PhosphorWindowRule::ActionParam::DurationMs).toInt();
+        const int ms = action.params.value(PhosphorWindowRules::ActionParam::DurationMs).toInt();
         return ms > 0 ? PhosphorI18n::tr("Duration: %1 ms").arg(ms) : PhosphorI18n::tr("Animation duration");
     }
     if (action.type == ActionType::OverrideAnimationCurve) {
-        const QString curve = action.params.value(PhosphorWindowRule::ActionParam::Curve).toString();
+        const QString curve = action.params.value(PhosphorWindowRules::ActionParam::Curve).toString();
         return curve.isEmpty() ? PhosphorI18n::tr("Animation curve")
                                : PhosphorI18n::tr("Curve: %1").arg(resolveWith(curve, curveLookup));
+    }
+    if (action.type == ActionType::OverrideOverlayShader) {
+        const QString id = action.params.value(PhosphorWindowRules::ActionParam::EffectId).toString();
+        return id.isEmpty() ? PhosphorI18n::tr("Overlay shader")
+                            : PhosphorI18n::tr("Overlay shader: %1").arg(resolveWith(id, overlayShaderLookup));
+    }
+    if (action.type == ActionType::OverrideOverlayStyle) {
+        const QString v = action.params.value(PhosphorWindowRules::ActionParam::Value).toString();
+        if (v == PhosphorWindowRules::OverlayStyleToken::Rectangles) {
+            return PhosphorI18n::tr("Overlay style: Zone rectangles");
+        }
+        if (v == PhosphorWindowRules::OverlayStyleToken::Preview) {
+            return PhosphorI18n::tr("Overlay style: Layout preview");
+        }
+        return PhosphorI18n::tr("Overlay style");
     }
     // ── single-value actions keyed on ActionParam::Value (restore-position,
     //    border / title-bar overrides, per-context gap overrides) ──
     {
-        const QJsonValue raw = action.params.value(PhosphorWindowRule::ActionParam::Value);
+        const QJsonValue raw = action.params.value(PhosphorWindowRules::ActionParam::Value);
         if (action.type == ActionType::RestorePosition) {
             return raw.toBool() ? PhosphorI18n::tr("Restore position on login")
                                 : PhosphorI18n::tr("Don't restore position on login");
@@ -313,6 +350,10 @@ QString actionLabel(const RuleAction& action, const WindowRuleModel::LabelLookup
         }
         if (action.type == ActionType::LockContext) {
             return raw.toBool() ? PhosphorI18n::tr("Lock layout") : PhosphorI18n::tr("Don't lock layout");
+        }
+        if (action.type == ActionType::DefaultLayoutAssignment) {
+            return raw.toBool() ? PhosphorI18n::tr("Assign default layout")
+                                : PhosphorI18n::tr("Don't assign default layout");
         }
         if (action.type == ActionType::SetBorderVisible) {
             return raw.toBool() ? PhosphorI18n::tr("Show border") : PhosphorI18n::tr("Hide border");
@@ -662,6 +703,34 @@ QString WindowRuleModel::fieldLabel(Field field)
         return PhosphorI18n::tr("Width");
     case Field::Height:
         return PhosphorI18n::tr("Height");
+    case Field::KeepAbove:
+        return PhosphorI18n::tr("Keep above");
+    case Field::KeepBelow:
+        return PhosphorI18n::tr("Keep below");
+    case Field::SkipTaskbar:
+        return PhosphorI18n::tr("Skip taskbar");
+    case Field::SkipPager:
+        return PhosphorI18n::tr("Skip pager");
+    case Field::SkipSwitcher:
+        return PhosphorI18n::tr("Skip switcher");
+    case Field::IsModal:
+        return PhosphorI18n::tr("Modal");
+    case Field::HasDecoration:
+        return PhosphorI18n::tr("Decorated");
+    case Field::IsResizable:
+        return PhosphorI18n::tr("Resizable");
+    case Field::PositionX:
+        return PhosphorI18n::tr("Position X");
+    case Field::PositionY:
+        return PhosphorI18n::tr("Position Y");
+    case Field::CaptionNormal:
+        return PhosphorI18n::tr("Title (no suffix)");
+    case Field::IsFloating:
+        return PhosphorI18n::tr("Floating");
+    case Field::IsSnapped:
+        return PhosphorI18n::tr("Snapped");
+    case Field::Zone:
+        return PhosphorI18n::tr("Zone");
     }
     return QString();
 }
@@ -672,14 +741,14 @@ QString WindowRuleModel::matchSummary(const MatchExpression& match) const
         return PhosphorI18n::tr("Any window");
     }
     if (match.isLeaf()) {
-        return leafLabel(match.predicate(), m_screenLookup, m_activityLookup);
+        return leafLabel(match.predicate(), m_screenLookup, m_activityLookup, m_zoneLookup);
     }
     // A simple AND renders its leaves joined by " · ".
     if (match.kind() == MatchExpression::Kind::All) {
         QStringList parts;
         for (const MatchExpression& child : match.children()) {
             if (child.isLeaf()) {
-                parts.append(leafLabel(child.predicate(), m_screenLookup, m_activityLookup));
+                parts.append(leafLabel(child.predicate(), m_screenLookup, m_activityLookup, m_zoneLookup));
             } else {
                 parts.append(PhosphorI18n::tr("(condition group)"));
             }
@@ -698,8 +767,8 @@ QString WindowRuleModel::actionSummary(const QList<RuleAction>& actions) const
     }
     QStringList parts;
     for (const RuleAction& a : actions) {
-        parts.append(
-            actionLabel(a, m_snappingLayoutLookup, m_tilingAlgorithmLookup, m_shaderEffectLookup, m_curveLookup));
+        parts.append(actionLabel(a, m_snappingLayoutLookup, m_tilingAlgorithmLookup, m_shaderEffectLookup,
+                                 m_overlayShaderLookup, m_curveLookup));
     }
     return parts.join(QStringLiteral(" · "));
 }
@@ -742,6 +811,11 @@ void WindowRuleModel::setActivityLabelLookup(LabelLookup fn)
     m_activityLookup = std::move(fn);
 }
 
+void WindowRuleModel::setZoneLabelLookup(LabelLookup fn)
+{
+    m_zoneLookup = std::move(fn);
+}
+
 void WindowRuleModel::setSnappingLayoutLabelLookup(LabelLookup fn)
 {
     m_snappingLayoutLookup = std::move(fn);
@@ -755,6 +829,11 @@ void WindowRuleModel::setTilingAlgorithmLabelLookup(LabelLookup fn)
 void WindowRuleModel::setShaderEffectLabelLookup(LabelLookup fn)
 {
     m_shaderEffectLookup = std::move(fn);
+}
+
+void WindowRuleModel::setOverlayShaderLabelLookup(LabelLookup fn)
+{
+    m_overlayShaderLookup = std::move(fn);
 }
 
 void WindowRuleModel::setCurveLabelLookup(LabelLookup fn)
@@ -775,7 +854,7 @@ void WindowRuleModel::refreshLabels()
     Q_EMIT dataChanged(top, bottom, {NameRole, MatchSummaryRole, ActionSummaryRole});
 }
 
-QString WindowRuleModel::displayName(const PhosphorWindowRule::WindowRule& rule) const
+QString WindowRuleModel::displayName(const PhosphorWindowRules::WindowRule& rule) const
 {
     // A rule whose stored name matches the auto-stamped form is treated as
     // "no name" so the row's title falls back to the (lookup-resolved) match
@@ -787,8 +866,8 @@ QString WindowRuleModel::displayName(const PhosphorWindowRule::WindowRule& rule)
     QString screenId;
     int virtualDesktop = 0;
     QString activity;
-    PhosphorWindowRule::ContextRuleBridge::contextDimsOf(rule.match, screenId, virtualDesktop, activity);
-    if (rule.name == PhosphorWindowRule::ContextRuleBridge::contextRuleName(screenId, virtualDesktop, activity)) {
+    PhosphorWindowRules::ContextRuleBridge::contextDimsOf(rule.match, screenId, virtualDesktop, activity);
+    if (rule.name == PhosphorWindowRules::ContextRuleBridge::contextRuleName(screenId, virtualDesktop, activity)) {
         return QString();
     }
     return rule.name;

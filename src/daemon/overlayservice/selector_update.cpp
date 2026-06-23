@@ -44,9 +44,11 @@ void updateZoneSelectorComputedProperties(PhosphorScreens::ScreenManager* mgr, Q
     writeQmlProperty(window, QStringLiteral("positionIsVertical"),
                      (pos == ZoneSelectorPosition::Left || pos == ZoneSelectorPosition::Right));
 
-    // Compute scaled zone appearance values (from global settings - not per-screen)
+    // Compute scaled zone appearance values. Zone padding honors per-screen
+    // overrides (resolution cascade: per-screen → global → default); border
+    // width/radius are global-only settings (no per-screen key exists).
     if (settings) {
-        const int zonePadding = settings->zonePadding();
+        const int zonePadding = GeometryUtils::getEffectiveZonePadding(nullptr, settings, virtualScreenId);
         const int zoneBorderWidth = settings->borderWidth();
         const int zoneBorderRadius = settings->borderRadius();
 
@@ -142,8 +144,11 @@ void OverlayService::updateZoneSelectorWindow(const QString& screenId)
     // Update settings-based properties
     if (m_settings) {
         writeColorSettings(window, m_settings);
-        // PhosphorZones::Zone appearance settings for scaled preview (global)
-        writeQmlProperty(window, QStringLiteral("zonePadding"), m_settings->zonePadding());
+        // PhosphorZones::Zone appearance for the scaled preview. Zone padding
+        // honors per-screen overrides (per-screen → global → default); border
+        // width/radius are global-only (no per-screen key exists).
+        writeQmlProperty(window, QStringLiteral("zonePadding"),
+                         GeometryUtils::getEffectiveZonePadding(nullptr, m_settings, screenId));
         writeQmlProperty(window, QStringLiteral("zoneBorderWidth"), m_settings->borderWidth());
         writeQmlProperty(window, QStringLiteral("zoneBorderRadius"), m_settings->borderRadius());
         // Font settings for zone number labels
@@ -180,7 +185,7 @@ void OverlayService::updateZoneSelectorWindow(const QString& screenId)
     // the zone selector appears during drag for the current mode.
     bool locked = false;
     if (m_settings && m_layoutManager) {
-        int curDesktop = m_layoutManager->currentVirtualDesktop();
+        int curDesktop = currentVirtualDesktopForScreen(screenId);
         QString curActivity = m_layoutManager->currentActivity();
         locked = isAnyModeLocked(m_settings, m_layoutManager, screenId, curDesktop, curActivity);
     }
@@ -240,7 +245,6 @@ void OverlayService::refreshContextLockState()
     if (!m_settings || !m_layoutManager) {
         return;
     }
-    const int curDesktop = m_layoutManager->currentVirtualDesktop();
     const QString curActivity = m_layoutManager->currentActivity();
 
     // Open zone selectors: one entry per screen with a live slot.
@@ -249,6 +253,8 @@ void OverlayService::refreshContextLockState()
         if (!window) {
             continue;
         }
+        // Per-output virtual desktops (#648): each screen resolves its own desktop.
+        const int curDesktop = currentVirtualDesktopForScreen(it.key());
         const bool locked = isAnyModeLocked(m_settings, m_layoutManager, it.key(), curDesktop, curActivity);
         writeQmlProperty(window, QStringLiteral("locked"), locked);
     }
@@ -257,6 +263,8 @@ void OverlayService::refreshContextLockState()
     // it, so push just the lock state to the live slot).
     if (m_layoutPickerVisible && !m_layoutPickerScreenId.isEmpty()) {
         if (auto* slot = m_screenStates.value(m_layoutPickerScreenId).layoutPickerSlot()) {
+            // Per-output virtual desktops (#648): each screen resolves its own desktop.
+            const int curDesktop = currentVirtualDesktopForScreen(m_layoutPickerScreenId);
             const bool locked =
                 isAnyModeLocked(m_settings, m_layoutManager, m_layoutPickerScreenId, curDesktop, curActivity);
             writeQmlProperty(slot, QStringLiteral("locked"), locked);

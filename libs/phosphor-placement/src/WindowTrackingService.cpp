@@ -194,6 +194,26 @@ QStringList WindowTrackingService::zonesForWindow(const QString& windowId) const
     return m_snapState->zonesForWindow(windowId);
 }
 
+QString WindowTrackingService::screenForWindow(const QString& windowId) const
+{
+    // Delegates to SnapState, which canonicalizes the id — the canonicalizing
+    // point accessor external callers use instead of screenAssignments().value().
+    return m_snapState ? m_snapState->screenForWindow(windowId) : QString();
+}
+
+QString WindowTrackingService::screenForWindow(const QString& windowId, const QString& defaultScreen) const
+{
+    if (!m_snapState) {
+        return defaultScreen;
+    }
+    // Return defaultScreen when the window has no usable (non-empty) screen
+    // assignment. Callers (snap commit / unfloat) always record a real screen, so
+    // in practice this matches the old screenAssignments().value(windowId,
+    // defaultScreen) idiom while also canonicalizing the id (issue #628).
+    const QString screen = m_snapState->screenForWindow(windowId);
+    return screen.isEmpty() ? defaultScreen : screen;
+}
+
 QStringList WindowTrackingService::windowsInZone(const QString& zoneId) const
 {
     Q_ASSERT(m_snapState);
@@ -210,11 +230,22 @@ QStringList WindowTrackingService::snappedWindows() const
     return m_snapState->snappedWindows();
 }
 
-int WindowTrackingService::pruneStaleAssignments(const QSet<QString>& aliveWindowIds)
+int WindowTrackingService::pruneStaleAssignments(const QSet<QString>& rawAliveWindowIds)
 {
     Q_ASSERT(m_snapState);
     if (!m_snapState)
         return 0;
+    // Canonicalize the alive set so it compares like-for-like against the
+    // canonical-keyed stores (the WTS-owned sticky / legacy-float sets below, and
+    // SnapState's maps). Otherwise a window still alive under a mutated-class
+    // composite would be pruned because its stored key is the first-seen one
+    // (issue #628). SnapState::pruneStaleAssignments re-canonicalizes defensively,
+    // so passing the canonical set there is correct too.
+    QSet<QString> aliveWindowIds;
+    aliveWindowIds.reserve(rawAliveWindowIds.size());
+    for (const QString& id : rawAliveWindowIds) {
+        aliveWindowIds.insert(canonicalizeForLookup(id));
+    }
     int pruned = m_snapState->pruneStaleAssignments(aliveWindowIds);
 
     int wtsCleaned = 0;
@@ -402,6 +433,58 @@ void WindowTrackingService::recordFreeGeometry(const QString& windowId, const QS
     p.screenId = screenId;
     p.freeGeometryByScreen.insert(screenId, geometry);
     if (m_placementStore.record(p)) {
+        markDirty(DirtyWindowPlacements);
+    }
+}
+
+void WindowTrackingService::recordFloatingClose(const QString& windowId, const QString& screenId, const QRect& geometry)
+{
+    if (windowId.isEmpty() || screenId.isEmpty() || !geometry.isValid()) {
+        return;
+    }
+    // Never let a tile rect become the float-back — same invariant recordFreeGeometry
+    // enforces. (An orphaned cross-screen-dragged window is floating, not tiled, so
+    // this is belt-and-braces.)
+    if (isWindowAutotileTiled(windowId)) {
+        return;
+    }
+    const QString appId = currentAppIdFor(windowId);
+    if (appId.isEmpty()) {
+        return;
+    }
+    PhosphorEngine::WindowPlacement p;
+    p.windowId = windowId;
+    p.appId = appId;
+    p.screenId = screenId;
+    p.freeGeometryByScreen.insert(screenId, geometry);
+    // Preserve the existing record's per-engine slots and context. Carrying a
+    // non-empty engine map is what makes the store merge adopt the new screenId
+    // (a geometry-only partial, like recordFreeGeometry, would leave the stale
+    // managed screen in place — exactly the bug this fixes).
+    if (const auto existing = m_placementStore.peek(windowId, appId)) {
+        p.virtualDesktop = existing->virtualDesktop;
+        p.activity = existing->activity;
+        p.kind = existing->kind;
+        p.engines = existing->engines;
+    }
+    if (p.engines.isEmpty()) {
+        // No prior record (first close after a cross-screen drag): synthesize a
+        // floating slot so the merge still adopts the screen. A floated restore
+        // keys off screenId + freeGeometryByScreen, not the slot's engine id, so
+        // the slot id is not load-bearing here.
+        PhosphorEngine::EngineSlot slot;
+        slot.state = PhosphorEngine::WindowPlacement::stateFloating();
+        p.engines.insert(QString(PhosphorEngine::WindowPlacement::snapEngineId()), slot);
+    }
+    if (m_placementStore.record(p)) {
+        markDirty(DirtyWindowPlacements);
+    }
+    // Close-capture convergence: this orphaned cross-screen close is the freshest
+    // authority for the app's float-back, so drop stale pure-float duplicates on
+    // the same screen (see WindowPlacementStore::collapsePureFloatSiblings). Mark
+    // dirty when it pruned — the record() above may have been a no-op, leaving this
+    // as the only mutation to persist.
+    if (m_placementStore.collapsePureFloatSiblings(appId, windowId)) {
         markDirty(DirtyWindowPlacements);
     }
 }
@@ -620,14 +703,18 @@ bool WindowTrackingService::clearFloatingForSnap(const QString& windowId)
 // Sticky Window Handling
 // ═══════════════════════════════════════════════════════════════════════════════
 
-void WindowTrackingService::setWindowSticky(const QString& windowId, bool sticky)
+void WindowTrackingService::setWindowSticky(const QString& rawWindowId, bool sticky)
 {
-    m_windowStickyStates[windowId] = sticky;
+    // Canonicalize so sticky state survives the effect-restart-after-class-mutation
+    // re-identification skew (issue #628). The daemon seeds the canonical mapping
+    // in WindowTrackingAdaptor::setWindowMetadata, so canonicalizeForLookup
+    // resolves to the first-seen composite without seeding here.
+    m_windowStickyStates[canonicalizeForLookup(rawWindowId)] = sticky;
 }
 
-bool WindowTrackingService::isWindowSticky(const QString& windowId) const
+bool WindowTrackingService::isWindowSticky(const QString& rawWindowId) const
 {
-    return m_windowStickyStates.value(windowId, false);
+    return m_windowStickyStates.value(canonicalizeForLookup(rawWindowId), false);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -650,8 +737,10 @@ const QHash<QString, QStringList>& WindowTrackingService::zoneAssignments() cons
 QStringList WindowTrackingService::recordedSnapZones(const QString& windowId) const
 {
     // Prefer the live, runtime assignment — it reflects this session's snaps.
+    // Go through the canonicalizing point accessor (not the raw whole-map getter)
+    // so a class-mutated window still resolves its live zones (issue #628).
     if (m_snapState) {
-        const QStringList live = m_snapState->zoneAssignments().value(windowId);
+        const QStringList live = m_snapState->zonesForWindow(windowId);
         if (!live.isEmpty()) {
             return live;
         }

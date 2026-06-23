@@ -231,6 +231,12 @@ public:
         return m_screenManager;
     }
     void setCurrentVirtualDesktop(int desktop);
+    /// This screen's current virtual desktop under Plasma 6.7 per-output virtual
+    /// desktops (#648). Delegates to the layout registry — the single source of
+    /// truth for the per-output desktop map — so overlay resolution matches
+    /// layout resolution; falls back to the global desktop when no registry is
+    /// wired.
+    int currentVirtualDesktopForScreen(const QString& screenId) const;
     void setCurrentActivity(const QString& activityId);
 
     /**
@@ -410,6 +416,18 @@ public:
     /// this only keeps the visual in sync.
     void refreshContextLockState();
 
+    /// Re-apply the (possibly rule-overridden) overlay shader / style to a
+    /// currently-displaying overlay after a window-rule change. A rule edit bumps
+    /// the rule-set revision (so the next `LayoutRegistry::resolveContextOverlay`
+    /// read drops its now-stale cache) but does not itself re-query it for the
+    /// live main overlay; this flips any
+    /// shader↔non-shader slot whose type the new style override changed, then
+    /// re-pushes each window's shader id/params. A no-op when the overlay is
+    /// hidden — the next `show()` re-resolves via `initializeOverlay`. Mirrors
+    /// the `overlayDisplayModeChanged` / `enableShaderEffectsChanged` wiring for
+    /// the equivalent global settings.
+    void refreshOverlayPropertiesIfShown();
+
 public Q_SLOTS:
     // hideLayoutOsd / hideNavigationOsd intentionally absent. Phase-5
     // dismiss path: QML auto-dismiss timer → loaded content's
@@ -571,6 +589,14 @@ private:
     PhosphorZones::Layout* resolveScreenLayout(QScreen* screen) const;
     PhosphorZones::Layout* resolveScreenLayout(const QString& screenId) const;
 
+    /// True when the snapping overlay must NOT show on @p screenId for the current
+    /// desktop/activity: either the context is on a disable list, OR its default
+    /// layout assignment is suppressed (the global "don't assign by default"
+    /// setting, or a per-context rule) and nothing is explicitly assigned. Folds
+    /// the two gates so every overlay / selector activation site treats a
+    /// suppressed context exactly like a disabled one.
+    bool isSnappingContextInactive(const QString& screenId) const;
+
     // PhosphorLayer infrastructure - owns the wlr-layer-shell binding, screen
     // enumeration, and Surface factory for all overlay-style windows. Members
     // ordered so factory is destroyed before provider/transport (factory keeps
@@ -638,7 +664,9 @@ private:
     // fire starts a timer; subsequent fires before the timer elapses do
     // nothing; the timer callback runs refreshVisibleWindows once.
     bool m_refreshCoalescePending = false;
-    int m_currentVirtualDesktop = 1; // Current virtual desktop (1-based)
+    int m_currentVirtualDesktop = 1; // Current virtual desktop (1-based); global
+                                     // fallback for currentVirtualDesktopForScreen
+                                     // when no layout registry is wired (#648).
     QString m_currentActivity; // Current KDE activity (empty = all activities)
     bool m_visible = false;
     bool m_zoneSelectorVisible = false;

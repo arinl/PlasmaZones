@@ -675,8 +675,10 @@ void WindowTrackingService::windowClosed(const QString& windowId, PhosphorEngine
     if (appId != windowId) {
         m_snapState->clearPreFloatZone(appId);
     }
-    // Remove sticky-window tracking outright — do NOT migrate to appId.
-    m_windowStickyStates.remove(windowId);
+    // Remove sticky-window tracking outright — do NOT migrate to appId. The
+    // sticky map is keyed on the canonical (first-seen) composite, so remove
+    // under it (issue #628).
+    m_windowStickyStates.remove(canonicalizeForLookup(windowId));
 
     scheduleSaveState();
 }
@@ -895,7 +897,6 @@ void WindowTrackingService::onLayoutChanged()
     // autotile period so resnapCurrentAssignments() can restore them when tiling is toggled off.
     // Skip windows on OTHER virtual desktops — their zone assignments belong to that
     // desktop's layout and must not be purged when the current desktop's layout changes.
-    const int currentDesktop = m_layoutManager->currentVirtualDesktop();
     const QString currentActivity = m_layoutManager->currentActivity();
 
     // Cache autotile status per screen to avoid redundant lookups (O(screens) instead of O(windows))
@@ -929,12 +930,15 @@ void WindowTrackingService::onLayoutChanged()
         // is a separate axis that only matters for windows whose desktop is
         // current." Don't reorder these without checking that the new ordering
         // still preserves the union {other-desktop OR autotile-screen}.
+        const QString windowScreen = lcScreens.value(it.key());
+        // Per-output virtual desktops (#648): "other desktop" is relative to the
+        // window's OWN screen's current desktop, not the global current.
+        const int currentDesktop = m_layoutManager->currentVirtualDesktopForScreen(windowScreen);
+
         const int windowDesktop = lcDesktops.value(it.key(), 0);
         if (windowDesktop != 0 && windowDesktop != currentDesktop) {
             continue;
         }
-
-        QString windowScreen = lcScreens.value(it.key());
 
         // If this screen's assignment is autotile, preserve zone assignments for resnap
         auto cached = screenIsAutotile.constFind(windowScreen);

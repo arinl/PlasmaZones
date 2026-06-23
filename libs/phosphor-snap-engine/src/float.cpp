@@ -53,7 +53,7 @@ void SnapEngine::setWindowFloat(const QString& windowId, bool shouldFloat)
     // 1. Try the window's tracked screen from WTS (most accurate)
     // 2. Fall back to m_lastActiveScreenId (from last windowFocused)
     // 3. Fall back to empty (unfloatToZone/applyGeometryForFloat handle gracefully)
-    QString screenId = m_snapState->screenAssignments().value(windowId);
+    QString screenId = m_snapState->screenForWindow(windowId);
     if (screenId.isEmpty()) {
         screenId = m_lastActiveScreenId;
     }
@@ -84,6 +84,28 @@ void SnapEngine::setWindowFloat(const QString& windowId, bool shouldFloat)
 
 bool SnapEngine::unfloatToZone(const QString& windowId, const QString& screenId)
 {
+    // Highest-priority un-float target: a matched SnapToZone rule. Toggling a
+    // window out of float lands it in the rule's zones, not a stale pre-float
+    // zone, so the rule stays authoritative for both open and Meta+F. Falls
+    // through to the pre-float / fallback zone when no rule matches.
+    {
+        const PhosphorEngine::SnapResult ruleSnap =
+            calculateSnapToPlacementRule(windowId, screenId, /*isSticky=*/false);
+        if (ruleSnap.shouldSnap && !ruleSnap.zoneIds.isEmpty()) {
+            if (ruleSnap.zoneIds.size() > 1) {
+                commitMultiZoneSnap(windowId, ruleSnap.zoneIds, ruleSnap.screenId, SnapIntent::UserInitiated);
+            } else {
+                commitSnap(windowId, ruleSnap.zoneIds.first(), ruleSnap.screenId, SnapIntent::UserInitiated);
+            }
+            // Non-empty zoneId so the effect treats this as a snap commit (re-applies
+            // snap chrome), mirroring the pre-float-zone path below.
+            Q_EMIT applyGeometryRequested(windowId, ruleSnap.geometry.x(), ruleSnap.geometry.y(),
+                                          ruleSnap.geometry.width(), ruleSnap.geometry.height(),
+                                          ruleSnap.zoneIds.first(), ruleSnap.screenId, false);
+            return true;
+        }
+    }
+
     UnfloatResult unfloat = resolveUnfloatGeometry(windowId, screenId);
     if (!unfloat.found) {
         // No pre-float zone (a never-snapped window that defaulted to floating).
@@ -171,13 +193,19 @@ bool SnapEngine::applyGeometryForFloat(const QString& windowId, const QString& s
         }
     }
 
-    auto geo = m_windowTracker->validatedUnmanagedGeometry(windowId, screenId);
-    if (geo) {
-        qCInfo(PhosphorSnapEngine::lcSnapEngine)
-            << "applyGeometryForFloat:" << windowId << "restoring to" << *geo << "(legacy unmanaged store)";
-        Q_EMIT applyGeometryRequested(windowId, geo->x(), geo->y(), geo->width(), geo->height(), QString(), screenId,
-                                      false);
-        return true;
+    // Legacy-store fallback (no placement record yet). Guard m_windowTracker:
+    // the placement-record block above is itself gated on a non-null tracker, so
+    // a null tracker falls straight here — deref it unconditionally and a
+    // headless-test engine (nullptr tracker) would crash.
+    if (m_windowTracker) {
+        auto geo = m_windowTracker->validatedUnmanagedGeometry(windowId, screenId);
+        if (geo) {
+            qCInfo(PhosphorSnapEngine::lcSnapEngine)
+                << "applyGeometryForFloat:" << windowId << "restoring to" << *geo << "(legacy unmanaged store)";
+            Q_EMIT applyGeometryRequested(windowId, geo->x(), geo->y(), geo->width(), geo->height(), QString(),
+                                          screenId, false);
+            return true;
+        }
     }
     qCWarning(PhosphorSnapEngine::lcSnapEngine) << "applyGeometryForFloat:" << windowId << "no pre-tile geometry found";
     return false;
@@ -247,7 +275,7 @@ UnfloatResult SnapEngine::resolveFallbackUnfloatGeometry(const QString& windowId
     // caller's fallback. A tracked screen that no longer exists (output unplugged)
     // is discarded in favour of the caller's fallback. Zone geometry is resolved on
     // the resulting screen so the fallback lands where the window currently is.
-    const QString screen = resolveUnfloatScreen(m_snapState->screenAssignments().value(windowId), fallbackScreen);
+    const QString screen = resolveUnfloatScreen(m_snapState->screenForWindow(windowId), fallbackScreen);
     if (screen.isEmpty() || !m_layoutManager) {
         return result;
     }
@@ -274,7 +302,7 @@ UnfloatResult SnapEngine::resolveFallbackUnfloatGeometry(const QString& windowId
         }
     }
     if (zoneId.isEmpty()) {
-        const int desktopFilter = m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktop() : 0;
+        const int desktopFilter = currentVirtualDesktopForScreen(screen);
         zoneId = m_windowTracker->findEmptyZoneInLayout(layout, screen, desktopFilter);
     }
     if (zoneId.isEmpty()) {
@@ -318,7 +346,37 @@ void SnapEngine::handoffReceive(const HandoffContext& ctx)
     if (!ctx.sourceZoneIds.isEmpty()) {
         QRect zoneGeo = m_windowTracker->resolveZoneGeometry(ctx.sourceZoneIds, ctx.toScreenId);
         if (zoneGeo.isValid()) {
-            if (ctx.sourceZoneIds.size() > 1) {
+            const int curDesktop = currentVirtualDesktopForScreen(ctx.toScreenId);
+            if (ctx.toDesktop > 0 && ctx.toDesktop != curDesktop) {
+                // Cross-DESKTOP handoff: the target desktop isn't the visible one,
+                // so assign the snap slot directly on SnapState for that desktop
+                // (commitSnap would stamp the current desktop) and refresh the
+                // placement-store record. This is the same path tryCrossDesktopMove
+                // uses, and it is safe to bypass commitSnap's WTS orchestration
+                // here: SnapState is the very store WTS queries (Daemon wires
+                // setSnapState(snapEngine->snapState())), so zoneForWindow et al.
+                // see this assignment; the snap chrome is applied below via the
+                // non-empty-zoneId applyGeometryRequested (→ markWindowSnapped); and
+                // persistence flows through the placement-store record. The only
+                // caller, handleCrossModeMove, always passes wasFloating==false, so
+                // there is no floating flag to clear.
+                if (ctx.sourceZoneIds.size() > 1) {
+                    m_snapState->assignWindowToZones(ctx.windowId, ctx.sourceZoneIds, ctx.toScreenId, ctx.toDesktop);
+                } else {
+                    m_snapState->assignWindowToZone(ctx.windowId, ctx.sourceZoneIds.first(), ctx.toScreenId,
+                                                    ctx.toDesktop);
+                }
+                if (auto placement = capturePlacement(ctx.windowId)) {
+                    placement->virtualDesktop = ctx.toDesktop;
+                    m_windowTracker->placementStore().record(std::move(*placement));
+                } else {
+                    // Mirror tryCrossDesktopMove: surface the SnapState↔placement
+                    // divergence rather than letting it hide.
+                    qCDebug(PhosphorSnapEngine::lcSnapEngine)
+                        << "handoffReceive: capturePlacement miss for" << ctx.windowId
+                        << "— placement-store desktop not updated to" << ctx.toDesktop;
+                }
+            } else if (ctx.sourceZoneIds.size() > 1) {
                 commitMultiZoneSnap(ctx.windowId, ctx.sourceZoneIds, ctx.toScreenId, SnapIntent::UserInitiated);
             } else {
                 commitSnap(ctx.windowId, ctx.sourceZoneIds.first(), ctx.toScreenId, SnapIntent::UserInitiated);
@@ -332,7 +390,7 @@ void SnapEngine::handoffReceive(const HandoffContext& ctx)
         }
     }
 
-    const int currentDesktop = m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktop() : 0;
+    const int currentDesktop = ctx.toDesktop > 0 ? ctx.toDesktop : currentVirtualDesktopForScreen(ctx.toScreenId);
     m_snapState->setFloatingOnScreen(ctx.windowId, ctx.toScreenId, currentDesktop);
     m_windowTracker->setWindowFloating(ctx.windowId, true);
     Q_EMIT windowFloatingChanged(ctx.windowId, true, ctx.toScreenId);
@@ -355,13 +413,18 @@ void SnapEngine::handoffRelease(const QString& windowId)
 
 QString SnapEngine::screenForTrackedWindow(const QString& windowId) const
 {
-    return m_snapState->screenAssignments().value(windowId);
+    return m_snapState->screenForWindow(windowId);
 }
 
 bool SnapEngine::isWindowTracked(const QString& windowId) const
 {
+    // All three arms must resolve a class-mutated window (issue #628).
+    // isWindowSnapped/isFloating canonicalize the id internally; the screen arm
+    // goes through screenForWindow (which canonicalizes) instead of a raw
+    // screenAssignments().contains() on the canonical-keyed map. A screen
+    // assignment is never empty, so a non-empty result means "present".
     return m_snapState->isWindowSnapped(windowId) || m_snapState->isFloating(windowId)
-        || m_snapState->screenAssignments().contains(windowId);
+        || !m_snapState->screenForWindow(windowId).isEmpty();
 }
 
 } // namespace PhosphorSnapEngine

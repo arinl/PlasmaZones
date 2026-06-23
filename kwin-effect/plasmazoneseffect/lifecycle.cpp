@@ -10,6 +10,7 @@
 
 #include <effect/effecthandler.h>
 #include <core/output.h>
+#include <virtualdesktops.h>
 #include <workspace.h>
 
 #include <QCoreApplication>
@@ -518,6 +519,31 @@ PlasmaZonesEffect::PlasmaZonesEffect()
         updateAllBorders();
     });
 
+    // Per-output virtual desktops (Plasma 6.7 "switch desktops independently for
+    // each screen"): report each output's current desktop so the daemon keys its
+    // per-screen desktop map off real per-output switches instead of KWin's global
+    // current — which flips merely on cursor movement between monitors on
+    // different desktops (#648). This signal does NOT fire on cursor movement,
+    // only on an actual desktop change for an output, so it is the deterministic
+    // source. `output == nullptr` is a global all-output switch (per-output mode
+    // off); fan out to every screen so the daemon has one code path.
+    connect(KWin::effects, &KWin::EffectsHandler::desktopChanged, this,
+            [this](KWin::VirtualDesktop*, KWin::VirtualDesktop* newDesktop, KWin::EffectWindow*,
+                   KWin::LogicalOutput* output) {
+                if (!newDesktop) {
+                    return;
+                }
+                if (output) {
+                    reportScreenDesktop(outputScreenId(output), static_cast<int>(newDesktop->x11DesktopNumber()));
+                    return;
+                }
+                for (auto* out : KWin::effects->screens()) {
+                    if (auto* vd = KWin::effects->currentDesktop(out)) {
+                        reportScreenDesktop(outputScreenId(out), static_cast<int>(vd->x11DesktopNumber()));
+                    }
+                }
+            });
+
     // Belt-and-suspenders: windowClosed removes animations, but if a deferred
     // timer re-adds one between windowClosed and windowDeleted, the Item tree
     // will be torn down while an animation entry still references the window.
@@ -804,6 +830,23 @@ PlasmaZonesEffect::PlasmaZonesEffect()
         // suppressing the handler across the burst.
         m_autotileHandler->clearTiledTracking();
         m_snapHandler->clearSnapTracking();
+        // Drop the zone / floating caches that feed the IsSnapped / Zone /
+        // IsFloating rule-match fields. Unlike the exclusion / animation rule
+        // sets (deliberately preserved below), these caches mirror per-window
+        // PLACEMENT state owned by the now-dead daemon session. Keeping them
+        // would let a `WHEN IsSnapped` / `Zone(...)` / `IsFloating` rule match
+        // against stale state during the bringup race until the async
+        // syncZonesFromDaemon / getFloatingWindows re-seed lands. Both are
+        // authoritatively repopulated on daemon-ready.
+        m_navigationHandler->clearAllZoneState();
+        m_navigationHandler->clearAllFloatingState();
+        // The placement caches above feed placement-scoped rule match inputs. A
+        // SetOpacity rule keyed on IsSnapped/IsFloating/Zone caches its verdict
+        // per (windowId, ruleSet revision) — neither moves here — so without this
+        // the window keeps its stale opacity (borders revert via restoreAll /
+        // clearAllBorders below, but opacity would not). Re-resolve every opacity
+        // window against the now-cleared placement, matching the border teardown.
+        invalidateAllRuleCaches();
         m_decorationManager->restoreAll();
         m_autotileHandler->restoreAllMonocleMaximized();
         clearAllBorders();

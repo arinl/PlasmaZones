@@ -10,7 +10,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
-#include <PhosphorWindowRule/WindowRule.h>
+#include <PhosphorWindowRules/WindowRule.h>
 
 #include "windowrulemodel.h"
 
@@ -87,6 +87,8 @@ public:
     /// registration via the typed snappingLayout/tilingAlgorithm pair.
     void setScreenLookup(WindowRuleModel::LabelLookup fn);
     void setActivityLookup(WindowRuleModel::LabelLookup fn);
+    /// zone UUID → zone-name resolver for `Zone` match-leaf labels.
+    void setZoneLookup(WindowRuleModel::LabelLookup fn);
     /// layoutId UUID → display label resolver for SetSnappingLayout actions.
     void setSnappingLayoutLookup(WindowRuleModel::LabelLookup fn);
     /// Algorithm token ("bsp", …) → display label resolver for SetTilingAlgorithm actions.
@@ -96,6 +98,11 @@ public:
     /// animation shader registry (the same source the rule editor's shader
     /// picker uses), so the list renders "Dissolve" rather than the raw id.
     void setShaderEffectLookup(WindowRuleModel::LabelLookup fn);
+    /// Overlay shader id → display name resolver for OverrideOverlayShader
+    /// actions. SettingsController wires this from the overlay/snapping shader
+    /// registry (the source the rule editor's overlay-shader picker uses), so
+    /// the list renders the friendly name rather than the raw id.
+    void setOverlayShaderLookup(WindowRuleModel::LabelLookup fn);
     /// Curve wire-string → display name resolver for OverrideAnimationCurve
     /// actions. Q_INVOKABLE and QJSValue-typed because the canonical curve
     /// naming (easing-preset matching + spring formatting + i18n labels) lives
@@ -277,6 +284,13 @@ public:
     /// Same entry shape as operatorsForField.
     Q_INVOKABLE QVariantList allOperators() const;
 
+    /// Optional input hint for a match condition's value editor, keyed on the
+    /// operator wire token @p op (the leaf's `node.op`) — empty when the operator
+    /// needs none. Shown beneath the value field for operators whose syntax or
+    /// matching semantics aren't obvious from a plain text box (regex, app-id
+    /// match). The match-side counterpart to the per-param action hints.
+    Q_INVOKABLE QString matchValueHint(const QString& op) const;
+
     /// Registered action types for the action-editor dropdown. Each entry:
     /// `{ value: QString (action type id), label, params: [ ... ],
     ///   domain: "context"|"window" }` where each param descriptor is
@@ -392,7 +406,7 @@ private:
     /// emit applyResult on the reply. Returns false ONLY for the up-front
     /// validation failure (a rule was rejected client-side) — the async leg
     /// covers transport errors via the applyResult signal.
-    bool pushToDaemonAsync(const QList<PhosphorWindowRule::WindowRule>& rules);
+    bool pushToDaemonAsync(const QList<PhosphorWindowRules::WindowRule>& rules);
 
     /// Renormalize every rule's priority so descending list order ⇒
     /// descending priority. Keeps the migrated-context bands roughly intact

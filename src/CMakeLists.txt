@@ -56,12 +56,14 @@ set(plasmazones_core_SRCS
     # callers include <PhosphorScreens/Swapper.h> directly.
     core/screenmoderouter.cpp
     core/screenmoderouter.h
+    core/crosssurfaceresolver.cpp
+    core/crosssurfaceresolver.h
     core/dbusvariantutils.cpp
     core/dbusvariantutils.h
     # zone, layout, layoututils, zonedetector, zonehighlighter, LayoutRegistry,
     # AssignmentEntry, LayoutAssignmentKey live in libs/phosphor-zones/ -
     # consumers include <PhosphorZones/...> directly and construct the registry
-    # with a borrowed PhosphorWindowRule::WindowRuleStore* + the
+    # with a borrowed PhosphorWindowRules::WindowRuleStore* + the
     # "plasmazones/layouts" subdir inline.
     core/unifiedlayoutlist.cpp
     core/unifiedlayoutlist.h
@@ -199,6 +201,7 @@ target_link_libraries(plasmazones_core
         PhosphorAnimation::PhosphorAnimation
         PhosphorConfig::PhosphorConfig
         PhosphorEngine::PhosphorEngine
+        PhosphorGeometry::PhosphorGeometry
         PhosphorWorkspaces::PhosphorWorkspaces
         PhosphorPlacement::PhosphorPlacement
         PhosphorTileEngine::PhosphorTileEngine
@@ -222,12 +225,12 @@ target_link_libraries(plasmazones_core
         # ConfigDefaults baseline), so consumers linking plasmazones_core need
         # the include path + link edge.
         PhosphorSurface::PhosphorSurface
-        # PhosphorWindowRule: the unified LGPL rule engine. PUBLIC since
+        # PhosphorWindowRules: the unified LGPL rule engine. PUBLIC since
         # Phase 3 — config/settings.h owns a WindowRuleStore for the per-mode
         # disable lists, the WindowRuleAdaptor exposes the store on D-Bus, and
         # config/configmigration.cpp builds rules during the v3→v4 conversion,
         # so consumers of plasmazones_core need the include path + link edge.
-        PhosphorWindowRule::PhosphorWindowRule
+        PhosphorWindowRules::PhosphorWindowRules
         # Frozen-snapshot per-screen mode + disable/lock resolver. PUBLIC
         # because D-Bus adaptors compiled into plasmazones_core
         # (windowdragadaptor / windowtrackingadaptor / snapadaptor) hold

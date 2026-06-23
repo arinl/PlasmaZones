@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
 import QtQuick
-import QtQuick.Window
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
@@ -72,6 +71,11 @@ ColumnLayout {
     property var expandedCategories: Object.create(null)
     //* Search text. Empty disables filtering.
     property alias searchText: searchField.text
+    /** When false, the sticky in-sidebar search field is hidden (and its
+     *  filter cleared). Lets a consumer that provides its own global search
+     *  (e.g. a header command field) suppress the redundant sidebar search
+     *  without losing the capability for other apps. */
+    property bool searchEnabled: true
     /** Optional Component instantiated next to each row's title. The
      *  loader exposes the row's entry as `modelData`. */
     property Component trailingDelegate: null
@@ -87,19 +91,7 @@ ColumnLayout {
     // Legacy row-height multipliers — extracted from inline magic numbers
     // to a single source so a future row-density tweak touches one place.
     readonly property real backButtonHeight: Kirigami.Units.gridUnit * 2.6
-    readonly property real navRowHeight: Kirigami.Units.gridUnit * 2.2
-    // Active-row left-accent stripe width — Math.round so fractional DPRs
-    // (1.5×, 1.25×) don't yield sub-pixel widths that anti-alias to a
-    // washed-out half-pixel line.
-    readonly property int accentBarWidth: Math.round(Screen.devicePixelRatio * 2.5)
-    /** Rendered height of the sticky SearchField row's control (excludes
-     *  its surrounding Layout margins). The chrome binds the breadcrumb
-     *  bar's height to this so the search field and the breadcrumb sit
-     *  at the same vertical center and their separators land on the same
-     *  Y — keeping the sidebar header and content header aligned. Zero in
-     *  compact mode (search field hidden), so the consumer falls back to
-     *  the breadcrumb's own implicit height. */
-    readonly property real searchFieldHeight: searchField.visible ? searchField.implicitHeight : 0
+    readonly property real navRowHeight: Kirigami.Units.gridUnit * 2.5
 
     function drillInto(parentId) {
         // Short-circuit on either the already-displayed scope OR a
@@ -512,15 +504,19 @@ ColumnLayout {
         // (root.searchText = "") instead of directly on `text` makes
         // the side effect visible to external consumers that might be
         // tracking the aliased property.
-        visible: !root.compact
+        visible: !root.compact && root.searchEnabled
         onVisibleChanged: {
             if (!visible)
                 root.searchText = "";
         }
     }
 
+    // Divides the search field from the list — only meaningful when the
+    // search field is shown. Hidden (e.g. a consumer that disabled the
+    // in-sidebar search, or compact mode) it would leave an orphaned top border.
     Kirigami.Separator {
         Layout.fillWidth: true
+        visible: searchField.visible
     }
 
     // ── Scrollable list area ────────────────────────────────────────
@@ -529,8 +525,8 @@ ColumnLayout {
 
         Layout.fillWidth: true
         Layout.fillHeight: true
-        // Inset the row list horizontally so the active-row accent
-        // stripe and hover backgrounds don't run flush against the
+        // Inset the row list horizontally so the active-row highlight
+        // and hover backgrounds don't run flush against the
         // window's left edge. Matches the SearchField's smallSpacing
         // inset above so rows align with the search field's left edge,
         // and balances the right-hand scrollbar gutter the ScrollView
@@ -551,7 +547,21 @@ ColumnLayout {
 
                 visible: root.currentParentId !== "" && root.searchText.length === 0
                 backButtonHeight: root.backButtonHeight
+                compact: root.compact
+                // Show the parent category name (e.g. "‹ Snapping"); pageData()
+                // returns an empty map for an unknown/empty id, so guard to "".
+                title: root.currentParentId !== "" ? (root.controller.registry.pageData(root.currentParentId).title || "") : ""
                 onBackClicked: root.drillOut()
+            }
+
+            // Drill-out rule — a first-class sibling (not buried in the back
+            // row's background) so it shares the section dividers' largeSpacing
+            // inset and lines up with the rows below.
+            Kirigami.Separator {
+                Layout.fillWidth: true
+                Layout.leftMargin: root.compact ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
+                Layout.rightMargin: root.compact ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
+                visible: backButton.visible
             }
 
             ListView {
@@ -562,19 +572,25 @@ ColumnLayout {
                 model: visibleModel
                 interactive: false
                 spacing: 0
+                // Contain the accordion add/displaced transitions: without it
+                // the in-flight rows (animating `y` as a category expands)
+                // paint outside the list's bounds and are seen sliding down
+                // behind the rows / footer below it.
+                clip: true
 
                 add: Transition {
                     enabled: !root._suppressAccordion
 
+                    // Fade newly-revealed rows in AT their final position — no
+                    // `y` animation. Translating added rows made the category's
+                    // children visibly fly in from above the header; the
+                    // `displaced` transition below already slides the rows after
+                    // the insertion point down to open the gap, which is the
+                    // accordion motion we actually want.
                     PhosphorMotionAnimation {
                         properties: "opacity"
                         from: 0
                         to: 1
-                        profile: "widget.accordionExpand"
-                    }
-
-                    PhosphorMotionAnimation {
-                        properties: "y"
                         profile: "widget.accordionExpand"
                     }
                 }
@@ -614,7 +630,6 @@ ColumnLayout {
                     isCurrent: !rowItem._isCollapsibleHeader && rowItem.hasQmlSource && root.controller.currentPageId === rowItem.pageId
                     compact: root.compact
                     navRowHeight: root.navRowHeight
-                    accentBarWidth: root.accentBarWidth
                     trailingDelegate: root.trailingDelegate
                     onNavigationRequested: pid => {
                         // Synthetic divider rows have pageIds like

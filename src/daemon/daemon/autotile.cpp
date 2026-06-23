@@ -26,6 +26,7 @@
 #include <memory>
 #include <QScreen>
 #include <PhosphorScreens/ScreenIdentity.h>
+#include <PhosphorIdentity/VirtualScreenId.h>
 
 namespace PlasmaZones {
 
@@ -53,13 +54,14 @@ void Daemon::updateAutotileScreens()
         return;
     }
 
-    const int desktop = currentDesktop();
     const QString activity = currentActivity();
 
     QSet<QString> autotileScreens;
     QHash<QString, QString> screenAlgorithms;
     const QStringList effectiveIds = m_screenManager->effectiveScreenIds();
     for (const QString& screenId : effectiveIds) {
+        // Per-output virtual desktops (#648): each screen resolves its own desktop.
+        const int desktop = currentDesktopForScreen(screenId);
         // Skip screens/desktops/activities where PlasmaZones is disabled.
         // Single cascade path through the resolver — see
         // libs/phosphor-context-resolver/README.md.
@@ -69,8 +71,19 @@ void Daemon::updateAutotileScreens()
         }
         QString assignmentId = m_layoutManager->assignmentIdForScreen(screenId, desktop, activity);
         if (PhosphorLayout::LayoutId::isAutotile(assignmentId)) {
+            const QString algoId = PhosphorLayout::LayoutId::extractAlgorithmId(assignmentId);
+            // Bare autotile (mode set, no concrete algorithm — e.g. a mode-only
+            // rule or a plain mode swap) draws its algorithm from the global
+            // default, which the suppress setting disables. Don't tile such a
+            // context when its default is suppressed (globally or by a
+            // per-context rule): tiling is active and would rearrange windows
+            // with a default the user opted out of. A concrete assigned
+            // algorithm is explicit and always tiles.
+            if (algoId.isEmpty()
+                && m_layoutManager->isDefaultAssignmentSuppressedForContext(screenId, desktop, activity)) {
+                continue;
+            }
             autotileScreens.insert(screenId);
-            QString algoId = PhosphorLayout::LayoutId::extractAlgorithmId(assignmentId);
             if (!algoId.isEmpty()) {
                 screenAlgorithms[screenId] = algoId;
             }
@@ -84,6 +97,8 @@ void Daemon::updateAutotileScreens()
     const QSet<QString> currentAutotileScreens = m_autotileEngine->activeScreens();
     const QSet<QString> removedScreens = currentAutotileScreens - autotileScreens;
     for (const QString& screenId : removedScreens) {
+        // Per-output virtual desktops (#648): each screen resolves its own desktop.
+        const int desktop = currentDesktopForScreen(screenId);
         QStringList order = m_autotileEngine->managedWindowOrder(screenId);
         if (!order.isEmpty()) {
             m_lastAutotileOrders[TilingStateKey{screenId, desktop, activity}] = order;
@@ -105,7 +120,14 @@ void Daemon::updateAutotileScreens()
         for (const QString& screenId : effectiveIds) {
             if (!autotileScreens.contains(screenId))
                 continue;
+            // Virtual->physical fallback (mirrors getPerScreenSnappingWithFallback):
+            // a per-screen autotile override stored on a physical monitor must
+            // still apply when this screenId is one of its virtual sub-screens.
             QVariantMap overrides = m_settings->getPerScreenAutotileSettings(screenId);
+            if (overrides.isEmpty() && PhosphorIdentity::VirtualScreenId::isVirtual(screenId)) {
+                overrides = m_settings->getPerScreenAutotileSettings(
+                    PhosphorIdentity::VirtualScreenId::extractPhysicalId(screenId));
+            }
             // Inject algorithm from layout assignment (authoritative source)
             if (screenAlgorithms.contains(screenId)) {
                 const QString screenAlgo = screenAlgorithms.value(screenId);
@@ -226,7 +248,6 @@ void Daemon::handleAutotileDisabled()
     // an explicit per-screen assignment. Fill those in individually without
     // clobbering screens that already have a valid snap layout.
     if (m_layoutManager && m_screenManager) {
-        const int desktop = currentDesktop();
         const QString activity = currentActivity();
         const QStringList effectiveIds = m_screenManager->effectiveScreenIds();
 
@@ -238,6 +259,8 @@ void Daemon::handleAutotileDisabled()
         {
             QSignalBlocker blocker(m_layoutManager.get());
             for (const QString& screenId : effectiveIds) {
+                // Per-output virtual desktops (#648): each screen resolves its own desktop.
+                const int desktop = currentDesktopForScreen(screenId);
                 const QString existingSnapId = m_layoutManager->snappingLayoutForScreen(screenId, desktop, activity);
                 const auto existingSnapUuid = Utils::parseUuid(existingSnapId);
                 PhosphorZones::Layout* existing =
@@ -290,11 +313,12 @@ void Daemon::handleSnappingToAutotile()
     // that already have an autotile assignment so we preserve their per-screen
     // algorithm customization (mixed-mode: screen A snap → autotile, screen B
     // already autotile stays on its configured algorithm).
-    const int desktop = currentDesktop();
     const QString activity = currentActivity();
     QStringList screensToConvert;
     const QStringList effectiveIds = m_screenManager->effectiveScreenIds();
     for (const QString& screenId : effectiveIds) {
+        // Per-output virtual desktops (#648): each screen resolves its own desktop.
+        const int desktop = currentDesktopForScreen(screenId);
         const QString existing = m_layoutManager->assignmentIdForScreen(screenId, desktop, activity);
         if (!PhosphorLayout::LayoutId::isAutotile(existing)) {
             screensToConvert.append(screenId);
@@ -328,6 +352,8 @@ void Daemon::handleSnappingToAutotile()
     {
         QSignalBlocker blocker(m_layoutManager.get());
         for (const QString& screenId : screensToConvert) {
+            // Per-output virtual desktops (#648): each screen resolves its own desktop.
+            const int desktop = currentDesktopForScreen(screenId);
             if (!activity.isEmpty()) {
                 m_layoutManager->clearAssignment(screenId, desktop, activity);
             }
@@ -342,9 +368,10 @@ QHash<TilingStateKey, QStringList> Daemon::captureAutotileOrders() const
     if (!m_autotileEngine) {
         return orders;
     }
-    const int desktop = currentDesktop();
     const QString activity = currentActivity();
     for (const QString& screenId : m_autotileEngine->activeScreens()) {
+        // Per-output virtual desktops (#648): each screen resolves its own desktop.
+        const int desktop = currentDesktopForScreen(screenId);
         QStringList order = m_autotileEngine->managedWindowOrder(screenId);
         if (!order.isEmpty()) {
             orders[TilingStateKey{screenId, desktop, activity}] = order;
@@ -425,7 +452,7 @@ void Daemon::presaveSnapFloats(const QString& screenId)
         // When scoped to a screen, only snapshot windows on that screen.
         // Windows floating on other screens are not entering autotile.
         if (!screenId.isEmpty()) {
-            const QString windowScreen = wts->screenAssignments().value(fid);
+            const QString windowScreen = wts->screenForWindow(fid);
             if (!windowScreen.isEmpty() && windowScreen != screenId) {
                 continue;
             }
@@ -444,7 +471,7 @@ void Daemon::seedAutotileOrderForScreen(const QString& screenId)
     // Prefer saved autotile order from last mode toggle (deterministic re-entry).
     // Falls back to zone-ordered window list when no saved order exists (first
     // activation, or windows changed between toggles).
-    TilingStateKey orderKey{screenId, currentDesktop(), currentActivity()};
+    TilingStateKey orderKey{screenId, currentDesktopForScreen(screenId), currentActivity()};
     QStringList order = m_lastAutotileOrders.value(orderKey);
     if (order.isEmpty()) {
         PhosphorPlacement::WindowTrackingService* wts = m_windowTrackingAdaptor->service();
@@ -473,7 +500,6 @@ void Daemon::processPendingGeometryUpdates()
     // tracks pending (screenId, layoutId) pairs explicitly so unrelated
     // geometriesComputed emissions (e.g. from an async layoutAssigned firing
     // mid-barrier) cannot drain it prematurely.
-    const int desktop = currentDesktop();
     const QString activity = currentActivity();
     const QStringList screenIds = m_screenManager->effectiveScreenIds();
 
@@ -491,6 +517,8 @@ void Daemon::processPendingGeometryUpdates()
     };
 
     for (const QString& screenId : screenIds) {
+        // Per-output virtual desktops (#648): each screen resolves its own desktop.
+        const int desktop = currentDesktopForScreen(screenId);
         PhosphorZones::Layout* layout = m_layoutManager->layoutForScreen(screenId, desktop, activity);
         if (layout) {
             requestFor(layout, screenId,

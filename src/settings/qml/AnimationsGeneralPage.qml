@@ -29,10 +29,6 @@ import org.kde.kirigami as Kirigami
 SettingsFlickable {
     id: page
 
-    // Slider sizing constants needed by EasingSettings (mirrors GeneralPage's
-    // contract — the embedded component reads these via its `constants` prop).
-    readonly property int sliderPreferredWidth: Kirigami.Units.gridUnit * 16
-    readonly property int sliderValueLabelWidth: Kirigami.Units.gridUnit * 3
     readonly property QtObject appSettings: settingsController.settings
     // ── Timing-mode state ───────────────────────────────────────────────
     // Computed from the live `animationEasingCurve` string: the "spring:"
@@ -109,13 +105,55 @@ SettingsFlickable {
         page.appSettings.animationEasingCurve = curveStr;
     }
 
+    // ── Shared curve/timing editor ↔ Settings-driven Global profile ─────
+    // The card now drives curve + duration through the same
+    // AnimationProfileEditor the per-event override cards use, instead of an
+    // inline bezier canvas. The editor owns its working state; we seed it from
+    // the saved profile and commit its changes back. Set while WE are writing
+    // so the change-signal handlers below don't re-seed the editor mid-edit.
+    property bool _committingEditor: false
+
+    // Push the saved profile into the editor. Property assignment doesn't emit
+    // the editor's valueChanged, so this never re-enters _commitEditor().
+    function _seedEditor() {
+        editor.timingMode = page._currentTimingMode;
+        editor.easingCurve = page._lastEasingCurve;
+        editor.springOmega = page._lastSpringOmega;
+        editor.springZeta = page._lastSpringZeta;
+        editor.duration = page.appSettings.animationDuration;
+    }
+
+    // Commit the editor's working state back to the Global profile.
+    function _commitEditor() {
+        page._committingEditor = true;
+        if (editor.timingMode === CurvePresets.timingModeSpring)
+            page._writeSpring(editor.springOmega, editor.springZeta);
+        else
+            page._writeEasing(editor.easingCurve);
+        if (page.appSettings.animationDuration !== editor.duration)
+            page.appSettings.animationDuration = editor.duration;
+        page._committingEditor = false;
+    }
+
     contentHeight: content.implicitHeight
     clip: true
-    Component.onCompleted: page._syncCachedValues()
+    Component.onCompleted: {
+        page._syncCachedValues();
+        page._seedEditor();
+    }
 
     Connections {
         function onAnimationEasingCurveChanged() {
             page._syncCachedValues();
+            // Don't re-seed while WE'RE the writer — the editor already holds
+            // the committed value, and re-seeding mid-edit (e.g. during a
+            // duration drag) would fight the live control.
+            if (!page._committingEditor)
+                page._seedEditor();
+        }
+        function onAnimationDurationChanged() {
+            if (!page._committingEditor)
+                page._seedEditor();
         }
 
         target: page.appSettings
@@ -144,6 +182,7 @@ SettingsFlickable {
 
             Layout.fillWidth: true
             headerText: i18n("Global animation defaults")
+            searchAnchor: "globalAnimationDefaults"
             showToggle: true
             toggleChecked: page.appSettings.animationsEnabled
             collapsible: true
@@ -154,95 +193,33 @@ SettingsFlickable {
             contentItem: ColumnLayout {
                 spacing: Kirigami.Units.largeSpacing
 
-                // ── Easing preview (visible only in easing mode) ──────────
-                EasingPreview {
-                    id: easingPreview
+                // ── Curve / timing editor ─────────────────────────────────
+                // Compact curve summary (thumbnail + "Customize…" → dialog) plus
+                // the timing-mode and duration rows — the same
+                // AnimationProfileEditor the per-event override cards use. This
+                // replaces the large inline bezier canvas, which read as a
+                // confusing "advanced editor" sitting on the defaults page. The
+                // editor is seeded from / committed to the Settings-driven Global
+                // profile (animationEasingCurve / animationDuration) via
+                // _seedEditor() / _commitEditor().
+                AnimationProfileEditor {
+                    id: editor
 
                     Layout.fillWidth: true
-                    Layout.maximumWidth: Kirigami.Units.gridUnit * 28
-                    Layout.alignment: Qt.AlignHCenter
-                    visible: page._currentTimingMode === CurvePresets.timingModeEasing
-                    // Feed the cached easing curve, never the raw setting,
-                    // so a "spring:..." write doesn't drive the parser
-                    // through invalid bezier territory while the spring
-                    // branch is what's actually visible.
-                    curve: page._lastEasingCurve
-                    animationDuration: page.appSettings.animationDuration
-                    previewEnabled: animationsCard.toggleChecked && page._currentTimingMode === CurvePresets.timingModeEasing
-                    opacity: animationsCard.toggleChecked ? 1 : 0.4
-                    onCurveEdited: function (newCurve) {
-                        page._writeEasing(newCurve);
-                    }
-                }
-
-                // ── Spring preview (visible only in spring mode) ──────────
-                SpringPreview {
-                    Layout.fillWidth: true
-                    Layout.maximumWidth: Kirigami.Units.gridUnit * 28
-                    Layout.alignment: Qt.AlignHCenter
-                    visible: page._currentTimingMode === CurvePresets.timingModeSpring
-                    omega: page._lastSpringOmega
-                    zeta: page._lastSpringZeta
-                    previewEnabled: animationsCard.toggleChecked && page._currentTimingMode === CurvePresets.timingModeSpring
-                    opacity: animationsCard.toggleChecked ? 1 : 0.4
-                }
-
-                SettingsSeparator {}
-
-                // ── Timing mode ───────────────────────────────────────────
-                // Mirrors AnimationEventCard's combo so both global and
-                // per-event configuration share the same shape. Switching
-                // mode commits a curve string immediately so the live
-                // preview and dependent sub-pages re-resolve.
-                SettingsRow {
-                    title: i18n("Default timing mode")
-                    description: i18n("Easing curves run for a fixed duration; springs derive their settle time from physics")
-
-                    WideComboBox {
-                        Accessible.name: i18n("Default timing mode")
-                        enabled: animationsCard.toggleChecked
-                        model: [i18n("Easing"), i18n("Spring")]
-                        currentIndex: page._currentTimingMode
-                        onActivated: function (index) {
-                            if (index === CurvePresets.timingModeSpring)
-                                page._writeSpring(page._lastSpringOmega, page._lastSpringZeta);
-                            else
-                                page._writeEasing(page._lastEasingCurve);
-                        }
-                    }
-                }
-
-                SettingsSeparator {}
-
-                // ── Easing controls (visible only in easing mode) ─────────
-                EasingSettings {
-                    Layout.fillWidth: true
-                    visible: page._currentTimingMode === CurvePresets.timingModeEasing
-                    // `appSettings` is resolved internally via
-                    // settingsController.settings — see EasingSettings.qml's
-                    // header comment for the qmlcachegen timing-window
-                    // explanation.
-                    constants: page
-                    animationsEnabled: animationsCard.toggleChecked
-                    easingPreview: easingPreview
-                }
-
-                // ── Spring controls (visible only in spring mode) ─────────
-                SpringSettings {
-                    Layout.fillWidth: true
-                    visible: page._currentTimingMode === CurvePresets.timingModeSpring
-                    animationsEnabled: animationsCard.toggleChecked
-                    omega: page._lastSpringOmega
-                    zeta: page._lastSpringZeta
-                    onSpringChanged: function (omega, zeta) {
-                        page._writeSpring(omega, zeta);
-                    }
+                    enabled: animationsCard.toggleChecked
+                    // The Global default has no shader leg in this UI — shader
+                    // overrides live on the per-event and Window Rules layers.
+                    shaderLegSupported: false
+                    showShaderSection: false
+                    eventLabel: i18n("Global animation defaults")
+                    onValueChanged: page._commitEditor()
                 }
 
                 SettingsSeparator {}
 
                 SettingsRow {
                     title: i18n("Multiple windows")
+                    searchAnchor: "multipleWindows"
                     description: i18n("How to animate when moving several windows at once")
 
                     WideComboBox {
@@ -259,6 +236,7 @@ SettingsFlickable {
                 SettingsRow {
                     visible: page.appSettings.animationSequenceMode === 1
                     title: i18n("Stagger delay")
+                    searchAnchor: "staggerDelay"
                     description: i18n("Pause between each window's animation start")
 
                     SettingsSlider {
@@ -280,6 +258,7 @@ SettingsFlickable {
 
                 SettingsRow {
                     title: i18n("Minimum distance")
+                    searchAnchor: "minimumDistance"
                     description: page.appSettings.animationMinDistance === 0 ? i18n("Currently: always animate, no threshold") : i18n("Skip animation when geometry changes less than this")
 
                     SettingsSpinBox {
@@ -322,6 +301,7 @@ SettingsFlickable {
 
             Layout.fillWidth: true
             headerText: i18n("Window Filtering")
+            searchAnchor: "windowFiltering"
             collapsible: true
 
             contentItem: ColumnLayout {
@@ -329,6 +309,7 @@ SettingsFlickable {
 
                 SettingsRow {
                     title: i18n("Exclude transient windows")
+                    searchAnchor: "excludeTransientWindows"
                     description: i18n("Skip animations for dialogs, popups, tooltips, and dropdown menus")
 
                     SettingsSwitch {
@@ -344,6 +325,7 @@ SettingsFlickable {
 
                 SettingsRow {
                     title: i18n("Exclude notifications and OSDs")
+                    searchAnchor: "excludeNotificationsAndOsds"
                     description: i18n("Skip animations for notification popups and on-screen displays such as volume and brightness")
 
                     SettingsSwitch {
@@ -359,6 +341,7 @@ SettingsFlickable {
 
                 SettingsRow {
                     title: i18n("Minimum window width")
+                    searchAnchor: "minimumWindowWidth"
                     description: page.appSettings.animationMinimumWindowWidth === 0 ? i18n("Disabled. No width threshold.") : i18n("Windows narrower than this will not animate")
 
                     SettingsSpinBox {
@@ -389,6 +372,7 @@ SettingsFlickable {
 
                 SettingsRow {
                     title: i18n("Minimum window height")
+                    searchAnchor: "minimumWindowHeight"
                     description: page.appSettings.animationMinimumWindowHeight === 0 ? i18n("Disabled. No height threshold.") : i18n("Windows shorter than this will not animate")
 
                     SettingsSpinBox {

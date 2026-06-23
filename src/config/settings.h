@@ -15,7 +15,7 @@
 #include "configbackends.h"
 
 #include <PhosphorConfig/Store.h>
-#include <PhosphorWindowRule/WindowRuleStore.h>
+#include <PhosphorWindowRules/WindowRuleStore.h>
 
 #include <memory>
 #include <QFont>
@@ -89,7 +89,7 @@ public:
      * @param parent Parent QObject
      */
     Settings(PhosphorConfig::IBackend* backend, PhosphorAnimation::CurveRegistry* curveRegistry,
-             PhosphorWindowRule::WindowRuleStore* windowRuleStore, QObject* parent);
+             PhosphorWindowRules::WindowRuleStore* windowRuleStore, QObject* parent);
 
     // Activation settings
     Q_PROPERTY(QVariantList dragActivationTriggers READ dragActivationTriggers WRITE setDragActivationTriggers NOTIFY
@@ -188,6 +188,8 @@ public:
 
     // Default layout (used when no explicit assignment exists)
     Q_PROPERTY(QString defaultLayoutId READ defaultLayoutId WRITE setDefaultLayoutId NOTIFY defaultLayoutIdChanged)
+    Q_PROPERTY(bool suppressDefaultLayoutAssignment READ suppressDefaultLayoutAssignment WRITE
+                   setSuppressDefaultLayoutAssignment NOTIFY suppressDefaultLayoutAssignmentChanged)
 
     // PhosphorZones::Layout filtering
     Q_PROPERTY(bool filterLayoutsByAspectRatio READ filterLayoutsByAspectRatio WRITE setFilterLayoutsByAspectRatio
@@ -204,7 +206,7 @@ public:
     // excludedWindowClasses) retired in v4 along with the standalone
     // Exclusions settings page; the lists folded into Window Rules and
     // the daemon serves the runtime evaluator from
-    // PhosphorWindowRule::ExclusionRules over the unified rule store.
+    // PhosphorWindowRules::ExclusionRules over the unified rule store.
     Q_PROPERTY(bool excludeTransientWindows READ excludeTransientWindows WRITE setExcludeTransientWindows NOTIFY
                    excludeTransientWindowsChanged)
     Q_PROPERTY(
@@ -226,7 +228,7 @@ public:
     // Q_PROPERTYs retired in v4 — the lists folded into `ExcludeAnimations`
     // WindowRules and the effect's `shouldAnimateWindow` gate now resolves
     // against the slice
-    // `PhosphorWindowRule::ExclusionRules::excludeAnimationsRulesFrom`
+    // `PhosphorWindowRules::ExclusionRules::excludeAnimationsRulesFrom`
     // produces from the unified rule store.
 
     // PhosphorZones::Zone Selector
@@ -531,7 +533,7 @@ public:
      *        object.
      * @param parent Parent QObject.
      */
-    Settings(PhosphorWindowRule::WindowRuleStore* windowRuleStore, QObject* parent);
+    Settings(PhosphorWindowRules::WindowRuleStore* windowRuleStore, QObject* parent);
     ~Settings() override = default;
 
     // No singleton - use dependency injection instead
@@ -687,6 +689,8 @@ public:
     void setSnapAssistTriggers(const QVariantList& triggers) override;
     QString defaultLayoutId() const override;
     void setDefaultLayoutId(const QString& layoutId) override;
+    bool suppressDefaultLayoutAssignment() const override;
+    void setSuppressDefaultLayoutAssignment(bool suppress) override;
 
     bool filterLayoutsByAspectRatio() const override;
     void setFilterLayoutsByAspectRatio(bool filter) override;
@@ -779,13 +783,6 @@ public:
                                                  const QVariant& value) override;
     Q_INVOKABLE void clearPerScreenSnappingSettings(const QString& screenIdOrName) override;
     Q_INVOKABLE bool hasPerScreenSnappingSettings(const QString& screenIdOrName) const override;
-
-    // Gaps sub-domain of the per-screen snapping map (the Snapping → Window →
-    // Appearance "Gaps" card). Report/clear only the gap keys so the card's
-    // reset never wipes the map's other (SnapAssist / ZoneSelector) overrides
-    // — mirrors the autotile Gaps/Algorithm split above.
-    bool hasPerScreenSnappingGapsSettings(const QString& screenIdOrName) const;
-    void clearPerScreenSnappingGapsSettings(const QString& screenIdOrName);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Autotiling Settings (ISettings interface)
@@ -1295,8 +1292,8 @@ private:
     // surface; the disabled*/setDisabled*/is*Disabled accessors read/write
     // through `m_windowRuleStore` (a raw pointer that always tracks the
     // active store — owned or borrowed).
-    std::unique_ptr<PhosphorWindowRule::WindowRuleStore> m_ownedWindowRuleStore;
-    PhosphorWindowRule::WindowRuleStore* m_windowRuleStore = nullptr;
+    std::unique_ptr<PhosphorWindowRules::WindowRuleStore> m_ownedWindowRuleStore;
+    PhosphorWindowRules::WindowRuleStore* m_windowRuleStore = nullptr;
 
     // Activation
     // Activation is stored in m_store.

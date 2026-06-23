@@ -96,6 +96,28 @@ Item {
             required property string modelData
             readonly property string pageId: pageLoader.modelData
             readonly property bool isCurrent: root.controller.currentPageId === pageLoader.pageId
+            // Lazy-build latch: a page incubates the first time it becomes
+            // current and stays built (cached) thereafter. Without it, `active:
+            // true` built ALL pages at once on startup — an async-incubation
+            // storm that overlapped the daemon's initial D-Bus broadcasts
+            // (model resets / layout reloads re-entering mid-incubation), an
+            // observed source of incubation-time crashes. Building one page at
+            // a time, on navigation, keeps the async no-hitch behaviour while
+            // removing the storm.
+            property bool _everCurrent: false
+
+            // Deep-link reveal latch: when this page is built + current,
+            // consume any pending anchor targeting it and invoke the page's
+            // duck-typed revealAnchor() contract. Covers first build
+            // (onLoaded), cached re-show (onIsCurrentChanged), and same-page
+            // deep links (the pendingAnchorChanged Connections below).
+            function _maybeReveal() {
+                if (!pageLoader.item || !pageLoader.isCurrent || pageLoader.status !== Loader.Ready)
+                    return;
+                const anchor = root.controller.takePendingAnchor(pageLoader.pageId);
+                if (anchor.length > 0 && typeof pageLoader.item.revealAnchor === "function")
+                    pageLoader.item.revealAnchor(anchor);
+            }
 
             anchors.fill: parent
             anchors.margins: root.contentMargins
@@ -103,7 +125,11 @@ Item {
             // unit is already warm, so construction is the only cost. Async
             // so even a heavy first build never hitches the UI thread.
             asynchronous: true
-            active: true
+            active: pageLoader.isCurrent || pageLoader._everCurrent
+            // Latch the initial current page so navigating away from it doesn't
+            // unload it (onIsCurrentChanged never fires for the initial value).
+            Component.onCompleted: if (pageLoader.isCurrent)
+                pageLoader._everCurrent = true
             source: {
                 const data = root.controller.registry.pageData(pageLoader.pageId);
                 return (data && data.id) ? data.qmlSource : "";
@@ -127,8 +153,12 @@ Item {
             opacity: 0
             onIsCurrentChanged: {
                 if (pageLoader.isCurrent) {
-                    if (pageLoader.status === Loader.Ready)
+                    // Latch so this page stays built/cached once visited.
+                    pageLoader._everCurrent = true;
+                    if (pageLoader.status === Loader.Ready) {
                         pageFadeIn.restart();
+                        pageLoader._maybeReveal();
+                    }
                 } else {
                     pageFadeIn.stop();
                     pageLoader.opacity = 0;
@@ -161,8 +191,21 @@ Item {
 
                 // Fade in if this page is the one being shown (covers the
                 // common first-visit case: built async while current).
-                if (pageLoader.isCurrent)
+                if (pageLoader.isCurrent) {
                     pageFadeIn.restart();
+                    pageLoader._maybeReveal();
+                }
+            }
+
+            Connections {
+                // Same-page deep link: the page is already built + current, so
+                // neither onLoaded nor onIsCurrentChanged fires — react to the
+                // pending-anchor signal directly.
+                function onPendingAnchorChanged() {
+                    pageLoader._maybeReveal();
+                }
+
+                target: root.controller
             }
         }
     }

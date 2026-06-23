@@ -6,6 +6,7 @@
 #include <QColor>
 #include <QHash>
 #include <QRectF>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -456,6 +457,14 @@ public:
     {
         return false;
     }
+    // Off by default: every context still gets the synthesized level-1 default
+    // layout (today's behavior). When on, no context is assigned an active
+    // snapping or autotiling layout until the user explicitly assigns one —
+    // overridable per context by a DefaultLayoutAssignment window rule.
+    static bool suppressDefaultLayoutAssignment()
+    {
+        return false;
+    }
     static bool filterLayoutsByAspectRatio()
     {
         return true;
@@ -680,6 +689,21 @@ public:
     // rule store. LayoutRegistry reads/writes this file directly.
     PLASMAZONES_EXPORT static QString quickLayoutsFilePath();
 
+    // Returns the absolute path to layout-settings.json — the per-layout
+    // settings sidecar (keyed by layout UUID). Per-layout settings are NOT part
+    // of the structural layout definition, so they live in a sibling sidecar
+    // next to windowrules.json rather than inside each layout file.
+    PLASMAZONES_EXPORT static QString layoutSettingsFilePath();
+
+    // Curated default picker visibility, seeded into layout-settings.json on a
+    // fresh install only (LayoutRegistry::seedDefaultLayoutSettingsIfFresh).
+    // Returns an object keyed exactly as layout-settings.json — manual layouts
+    // by bundled UUID (with braces), algorithms by the "autotile:<id>" form —
+    // mapping each non-curated id to `{ "hiddenFromSelector": true }`. Listed
+    // ids start hidden; everything else stays visible. Users re-show any item
+    // via the eye toggle, and existing installs are never reseeded.
+    PLASMAZONES_EXPORT static QJsonObject defaultLayoutVisibilitySettings();
+
     // Returns the absolute path to the legacy plasmazonesrc file (INI format).
     // Used only by the one-time migration module.
     PLASMAZONES_EXPORT static QString legacyConfigFilePath();
@@ -890,9 +914,16 @@ public:
     // Autotile Settings
     // ═══════════════════════════════════════════════════════════════════════════
 
+    // Autotiling is on out of the box so PlasmaZones tiles like a dynamic
+    // tiler (krohnkite, dwm, xmonad) without setup. The companion
+    // krohnkite-parity behaviors are already on by default elsewhere here:
+    // autotileFocusNewWindows, autotileSmartGaps (sole window fills the
+    // screen), autotileRespectMinimumSize, and excludeTransientWindows
+    // (dialogs / utility windows float), with new windows inserted at the
+    // stack end rather than as master.
     static bool autotileEnabled()
     {
-        return false;
+        return true;
     }
     static QString defaultAutotileAlgorithm()
     {

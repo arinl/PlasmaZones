@@ -452,7 +452,9 @@ KWin::GLShader* PlasmaZonesEffect::surfacePresentShader()
 
     auto shader = KWin::ShaderManager::instance()->generateCustomShader(KWin::ShaderTrait::MapTexture, kPresentVertex,
                                                                         kPresentFragment);
-    if (!shader || !shader->isValid()) {
+    // KWin 6.7 removed GLShader::isValid(); generateCustomShader returns nullptr
+    // when compilation or linking fails, so a null check is the validity test.
+    if (!shader) {
         qCWarning(lcEffect) << "Failed to compile surface present shader — multi-pack decoration disabled this session";
         return nullptr;
     }

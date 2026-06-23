@@ -41,6 +41,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QStandardPaths>
 #include <QTest>
 
 #include <algorithm>
@@ -51,13 +52,14 @@
 #include "../../../src/config/settings.h"
 #include "../helpers/IsolatedConfigGuard.h"
 
-#include <PhosphorWindowRule/ContextRuleBridge.h>
-#include <PhosphorWindowRule/WindowRule.h>
-#include <PhosphorWindowRule/WindowRuleSet.h>
+#include <PhosphorWindowRules/ContextRuleBridge.h>
+#include <PhosphorWindowRules/ExclusionRules.h>
+#include <PhosphorWindowRules/WindowRule.h>
+#include <PhosphorWindowRules/WindowRuleSet.h>
 
 using namespace PlasmaZones;
 using PlasmaZones::TestHelpers::IsolatedConfigGuard;
-namespace CRB = PhosphorWindowRule::ContextRuleBridge;
+namespace CRB = PhosphorWindowRules::ContextRuleBridge;
 
 class TestMigrationV3ToV4 : public QObject
 {
@@ -320,6 +322,177 @@ private Q_SLOTS:
         QVERIFY(!cfg.contains(QStringLiteral("_v4AnimationExclusionStash")));
     }
 
+    void testLayoutAppRules_becomeSnapToZoneRules()
+    {
+        IsolatedConfigGuard guard;
+        writeJson(ConfigDefaults::configFilePath(), makeV3Config());
+        writeJson(assignmentsPath(), makeAssignments());
+
+        // A v3 layout file carrying two legacy app→zone rules: firefox → zone 2
+        // (no screen), and konsole → zone 3 with a legacy targetScreen "DP-1"
+        // (which v4 intentionally drops — see below). They live in the user data
+        // dir the migration scans.
+        const QString layoutsDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+            + QLatin1Char('/') + ConfigDefaults::layoutsSubdir();
+        QJsonArray appRules;
+        appRules.append(
+            QJsonObject{{QStringLiteral("pattern"), QStringLiteral("firefox")}, {QStringLiteral("zoneNumber"), 2}});
+        appRules.append(QJsonObject{{QStringLiteral("pattern"), QStringLiteral("konsole")},
+                                    {QStringLiteral("zoneNumber"), 3},
+                                    {QStringLiteral("targetScreen"), QStringLiteral("DP-1")}});
+        writeJson(layoutsDir + QStringLiteral("/layout1.json"), QJsonObject{{QStringLiteral("appRules"), appRules}});
+
+        QVERIFY(ConfigMigration::ensureJsonConfig());
+
+        const QJsonArray rules = rulesFromWindowRules();
+
+        // The 1-based zone ordinals carried by a rule's SnapToZone action.
+        const auto snapZones = [](const QJsonObject& rule) -> QList<int> {
+            QList<int> out;
+            for (const QJsonValue& v : rule.value(QStringLiteral("actions")).toArray()) {
+                const QJsonObject a = v.toObject();
+                if (a.value(QStringLiteral("type")).toString() == QLatin1String("snapToZone")) {
+                    for (const QJsonValue& z : a.value(QStringLiteral("zones")).toArray()) {
+                        out.append(z.toInt());
+                    }
+                }
+            }
+            return out;
+        };
+
+        QJsonObject firefoxRule;
+        QJsonObject konsoleRule;
+        for (const QJsonValue& v : rules) {
+            const QJsonObject r = v.toObject();
+            if (!actionTypes(r).contains(QLatin1String("snapToZone"))) {
+                continue;
+            }
+            const QString cls = matchLeafValueByOp(r, QStringLiteral("appId"), QStringLiteral("appIdMatches"));
+            if (cls == QLatin1String("firefox")) {
+                firefoxRule = r;
+            } else if (cls == QLatin1String("konsole")) {
+                konsoleRule = r;
+            }
+        }
+
+        // firefox → SnapToZone [2]; a single AppId-appIdMatches leaf (no screen).
+        QVERIFY(!firefoxRule.isEmpty());
+        QCOMPARE(snapZones(firefoxRule), (QList<int>{2}));
+        QCOMPARE(matchLeaves(firefoxRule).size(), 1);
+
+        // konsole → SnapToZone [3]; the legacy targetScreen "DP-1" is dropped, so
+        // it is a single AppId-appIdMatches leaf with NO ScreenId constraint (a
+        // migrated app snaps on whatever screen it opens on).
+        QVERIFY(!konsoleRule.isEmpty());
+        QCOMPARE(snapZones(konsoleRule), (QList<int>{3}));
+        QCOMPARE(matchLeaves(konsoleRule).size(), 1);
+        QVERIFY(matchLeafValueByOp(konsoleRule, QStringLiteral("screenId"), QStringLiteral("equals")).isEmpty());
+    }
+
+    void testLayoutAppRules_dedupePatternAcrossLayouts()
+    {
+        IsolatedConfigGuard guard;
+        writeJson(ConfigDefaults::configFilePath(), makeV3Config());
+        writeJson(assignmentsPath(), makeAssignments());
+
+        // Same pattern in two layout files mapping to DIFFERENT zones. A global
+        // ordinal SnapToZone rule fires regardless of the active layout, so only
+        // the first (name-order) wins; the second is dropped.
+        const QString layoutsDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+            + QLatin1Char('/') + ConfigDefaults::layoutsSubdir();
+        writeJson(layoutsDir + QStringLiteral("/a-layout.json"),
+                  QJsonObject{{QStringLiteral("appRules"),
+                               QJsonArray{QJsonObject{{QStringLiteral("pattern"), QStringLiteral("mpv")},
+                                                      {QStringLiteral("zoneNumber"), 1}}}}});
+        writeJson(layoutsDir + QStringLiteral("/b-layout.json"),
+                  QJsonObject{{QStringLiteral("appRules"),
+                               QJsonArray{QJsonObject{{QStringLiteral("pattern"), QStringLiteral("mpv")},
+                                                      {QStringLiteral("zoneNumber"), 4}}}}});
+
+        QVERIFY(ConfigMigration::ensureJsonConfig());
+
+        int mpvRuleCount = 0;
+        QList<int> winningZones;
+        for (const QJsonValue& v : rulesFromWindowRules()) {
+            const QJsonObject r = v.toObject();
+            if (matchLeafValueByOp(r, QStringLiteral("appId"), QStringLiteral("appIdMatches"))
+                != QLatin1String("mpv")) {
+                continue;
+            }
+            ++mpvRuleCount;
+            for (const QJsonValue& av : r.value(QStringLiteral("actions")).toArray()) {
+                const QJsonObject a = av.toObject();
+                if (a.value(QStringLiteral("type")).toString() == QLatin1String("snapToZone")) {
+                    for (const QJsonValue& z : a.value(QStringLiteral("zones")).toArray()) {
+                        winningZones.append(z.toInt());
+                    }
+                }
+            }
+        }
+        QCOMPARE(mpvRuleCount, 1);
+        QCOMPARE(winningZones, (QList<int>{1})); // a-layout.json wins on name order
+    }
+
+    void testLayoutAppRules_idempotentRuleIds()
+    {
+        // The SnapToZone migration's rule id is derived from
+        // (pattern, zoneNumber) via a fixed v5-UUID namespace, so a
+        // crash-and-retry conversion yields byte-identical rules. This mirrors the
+        // sibling exclusion / animation folds' idempotency tests and pins the
+        // namespace UUID + segment encoding so a future drift in either forces a
+        // deliberate update here (the migration owns both ends of the derivation,
+        // so a same-inputs→same-id check alone cannot catch a namespace change).
+        IsolatedConfigGuard guard;
+        writeJson(ConfigDefaults::configFilePath(), makeV3Config());
+        writeJson(assignmentsPath(), makeAssignments());
+
+        const QString layoutsDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+            + QLatin1Char('/') + ConfigDefaults::layoutsSubdir();
+        writeJson(layoutsDir + QStringLiteral("/layout1.json"),
+                  QJsonObject{{QStringLiteral("appRules"),
+                               QJsonArray{QJsonObject{{QStringLiteral("pattern"), QStringLiteral("firefox")},
+                                                      {QStringLiteral("zoneNumber"), 2}}}}});
+
+        // Finds the id of the SnapToZone rule whose AppId-appIdMatches leaf is the
+        // given pattern.
+        const auto snapRuleIdFor = [this](const QString& pattern) -> QString {
+            for (const QJsonValue& v : rulesFromWindowRules()) {
+                const QJsonObject r = v.toObject();
+                if (actionTypes(r).contains(QLatin1String("snapToZone"))
+                    && matchLeafValueByOp(r, QStringLiteral("appId"), QStringLiteral("appIdMatches")) == pattern) {
+                    return r.value(QStringLiteral("id")).toString();
+                }
+            }
+            return {};
+        };
+
+        QVERIFY(ConfigMigration::ensureJsonConfig());
+        const QString firstId = snapRuleIdFor(QStringLiteral("firefox"));
+        QVERIFY(!firstId.isEmpty());
+
+        // Golden assertion against the SPEC: namespace UUID + length-prefixed
+        // segment encoding ("<size>:<bytes>" per segment, no separator). The id is
+        // derived from (pattern, zoneNumber) only — targetScreen is not carried
+        // into the rule, so it is not part of the identity.
+        //   segment 1 → pattern    "firefox" → "7:firefox"
+        //   segment 2 → zoneNumber "2"       → "1:2"
+        const QUuid kExpectedNamespace(QStringLiteral("{6f1c8e44-2a7b-5d93-8e10-4b2c9a7f1d35}"));
+        const QString kExpectedKey = QStringLiteral("7:firefox") + QStringLiteral("1:2");
+        QCOMPARE(firstId, QUuid::createUuidV5(kExpectedNamespace, kExpectedKey).toString());
+
+        // Force the rebuild path again and re-stage the same v3 inputs.
+        QFile::remove(ConfigDefaults::windowRulesFilePath());
+        writeJson(ConfigDefaults::configFilePath(), makeV3Config());
+        writeJson(layoutsDir + QStringLiteral("/layout1.json"),
+                  QJsonObject{{QStringLiteral("appRules"),
+                               QJsonArray{QJsonObject{{QStringLiteral("pattern"), QStringLiteral("firefox")},
+                                                      {QStringLiteral("zoneNumber"), 2}}}}});
+        ConfigMigration::resetMigrationGuardForTesting();
+        QVERIFY(ConfigMigration::ensureJsonConfig());
+
+        QCOMPARE(snapRuleIdFor(QStringLiteral("firefox")), firstId);
+    }
+
     // ─── Exact cascade priorities ─────────────────────────────────────────
 
     void testCascadePriorities_exactValues()
@@ -398,10 +571,20 @@ private Q_SLOTS:
         QVERIFY(ConfigMigration::ensureJsonConfig());
 
         const QJsonArray rules = rulesFromWindowRules();
-        const QList<QJsonObject> defaults = allRulesByPriority(rules, 0);
-        QCOMPARE(defaults.size(), 1);
+        // Priority 0 is the shared exclusion/catch-all band: the migrated AppId
+        // Exclude rules AND the premade Steam exclusion rule also live at 0, so
+        // the catch-all is no longer the sole priority-0 rule. Identify it by
+        // its defining empty-All{} match instead of by priority alone.
+        QList<QJsonObject> catchAlls;
+        for (const QJsonObject& r : allRulesByPriority(rules, 0)) {
+            const QJsonObject m = r.value(QStringLiteral("match")).toObject();
+            if (m.contains(QStringLiteral("all")) && m.value(QStringLiteral("all")).toArray().isEmpty()) {
+                catchAlls.append(r);
+            }
+        }
+        QCOMPARE(catchAlls.size(), 1);
 
-        const QJsonObject def = defaults.first();
+        const QJsonObject def = catchAlls.first();
         // The catch-all match is an empty All{} — serialized as { "all": [] }.
         const QJsonObject match = def.value(QStringLiteral("match")).toObject();
         QVERIFY(match.contains(QStringLiteral("all")));
@@ -530,11 +713,11 @@ private Q_SLOTS:
 
         // makeDisableRule's priority must agree with the migration output for
         // a multi-dimension entry — a screen+desktop disable rule pins 410.
-        const PhosphorWindowRule::WindowRule directDesktop = CRB::makeDisableRule(
+        const PhosphorWindowRules::WindowRule directDesktop = CRB::makeDisableRule(
             QStringLiteral("d"), QStringLiteral("DP-1"), /*virtualDesktop=*/4, QString(), QStringLiteral("snapping"));
         QCOMPARE(directDesktop.priority, 410);
         // A screen+activity disable rule pins 510 — activity outranks desktop.
-        const PhosphorWindowRule::WindowRule directActivity = CRB::makeDisableRule(
+        const PhosphorWindowRules::WindowRule directActivity = CRB::makeDisableRule(
             QStringLiteral("a"), QStringLiteral("DP-1"), 0, QStringLiteral("act-uuid-7"), QStringLiteral("autotile"));
         QCOMPARE(directActivity.priority, 510);
         QVERIFY(directActivity.priority > directDesktop.priority);
@@ -587,9 +770,19 @@ private Q_SLOTS:
 
         QVERIFY(QFile::exists(ConfigDefaults::windowRulesFilePath()));
         const QJsonArray rules = rulesFromWindowRules();
-        // Exactly one rule: the provider-default catch-all.
-        QCOMPARE(rules.size(), 1);
-        const QJsonObject def = rules.first().toObject();
+        // Two rules: the provider-default catch-all + the premade Steam
+        // exclusion rule (seeded unconditionally on every fresh/migrated v4
+        // config). Identify the catch-all by its empty-All{} match.
+        QCOMPARE(rules.size(), 2);
+        QJsonObject def;
+        for (const QJsonValue& v : rules) {
+            const QJsonObject r = v.toObject();
+            const QJsonObject m = r.value(QStringLiteral("match")).toObject();
+            if (m.contains(QStringLiteral("all")) && m.value(QStringLiteral("all")).toArray().isEmpty()) {
+                def = r;
+            }
+        }
+        QVERIFY2(!def.isEmpty(), "provider-default catch-all must be present");
         QCOMPARE(def.value(QStringLiteral("priority")).toInt(), 0);
 
         // With no DefaultLayoutId and no Tiling default algorithm, the
@@ -601,6 +794,72 @@ private Q_SLOTS:
         const QJsonArray actions = def.value(QStringLiteral("actions")).toArray();
         QCOMPARE(actions.size(), 1);
         QCOMPARE(actions.first().toObject().value(QStringLiteral("mode")).toString(), QStringLiteral("snapping"));
+    }
+
+    // ─── Premade Steam rule ───────────────────────────────────────────────
+    // Every fresh install and every v3→v4 upgrade is seeded with the built-in
+    // Steam tiling fix: exclude every `steam`-class window whose title is NOT
+    // exactly "Steam" (Friends List, notification toasts, settings, chat),
+    // leaving the main library window tileable.
+
+    void testSteamDefaultRule_seeded()
+    {
+        IsolatedConfigGuard guard;
+        QJsonObject cfg;
+        cfg.insert(QStringLiteral("_version"), 3);
+        writeJson(ConfigDefaults::configFilePath(), cfg);
+
+        QVERIFY(ConfigMigration::ensureJsonConfig());
+
+        const QJsonArray rules = rulesFromWindowRules();
+        QJsonObject steam;
+        for (const QJsonValue& v : rules) {
+            const QJsonObject r = v.toObject();
+            if (r.value(QStringLiteral("name")).toString() == QLatin1String("Steam")) {
+                steam = r;
+            }
+        }
+        QVERIFY2(!steam.isEmpty(), "premade Steam rule must be seeded on a fresh/migrated v4 config");
+        QVERIFY(steam.value(QStringLiteral("enabled")).toBool());
+
+        // A single terminal Exclude action — the window is left unmanaged by
+        // snap/tile.
+        QCOMPARE(actionTypes(steam), (QStringList{QStringLiteral("exclude")}));
+
+        // Match shape: All{ WindowClass contains "steam", None{ Title equals "Steam" } }.
+        const QJsonObject match = steam.value(QStringLiteral("match")).toObject();
+        QVERIFY(match.contains(QStringLiteral("all")));
+        const QJsonArray all = match.value(QStringLiteral("all")).toArray();
+        QCOMPARE(all.size(), 2);
+
+        // WindowClass contains "steam" (matches KWin's raw "resourceName
+        // resourceClass" string case-insensitively).
+        QCOMPARE(matchLeafValueByOp(steam, QStringLiteral("windowClass"), QStringLiteral("contains")),
+                 QStringLiteral("steam"));
+
+        // None{ Title equals "Steam" } — the negative guard that keeps the
+        // main library window (title exactly "Steam") tileable.
+        bool foundTitleGuard = false;
+        for (const QJsonValue& v : all) {
+            const QJsonObject child = v.toObject();
+            if (!child.contains(QStringLiteral("none"))) {
+                continue;
+            }
+            const QJsonArray none = child.value(QStringLiteral("none")).toArray();
+            QCOMPARE(none.size(), 1);
+            const QJsonObject leaf = none.first().toObject();
+            QCOMPARE(leaf.value(QStringLiteral("field")).toString(), QStringLiteral("title"));
+            QCOMPARE(leaf.value(QStringLiteral("op")).toString(), QStringLiteral("equals"));
+            QCOMPARE(leaf.value(QStringLiteral("value")).toVariant().toString(), QStringLiteral("Steam"));
+            foundTitleGuard = true;
+        }
+        QVERIFY2(foundTitleGuard, "Steam rule must carry a None{ Title equals \"Steam\" } guard");
+
+        // The rule is sliced into the Exclude rule set the daemon/effect
+        // consume — i.e. it actually participates in the exclusion gate.
+        const auto set = PhosphorWindowRules::WindowRuleSet::loadFromFile(ConfigDefaults::windowRulesFilePath());
+        QVERIFY(set.has_value());
+        QCOMPARE(PhosphorWindowRules::ExclusionRules::excludeRulesFrom(*set).count(), 1);
     }
 
     // ─── Superseding: assignments.json retired to .migrated ───────────────
@@ -733,9 +992,9 @@ private Q_SLOTS:
         // The user authors a new rule via the rule editor — load the store,
         // append a rule, persist it. This rule exists ONLY in windowrules.json;
         // it has no counterpart in assignments.json.
-        auto setWithUserRule = PhosphorWindowRule::WindowRuleSet::loadFromFile(ConfigDefaults::windowRulesFilePath());
+        auto setWithUserRule = PhosphorWindowRules::WindowRuleSet::loadFromFile(ConfigDefaults::windowRulesFilePath());
         QVERIFY2(setWithUserRule.has_value(), "windowrules.json must parse as a v4 rule set");
-        const PhosphorWindowRule::WindowRule userRule =
+        const PhosphorWindowRules::WindowRule userRule =
             CRB::makeDisableRule(QStringLiteral("User-authored · DP-9"), QStringLiteral("DP-9"),
                                  /*virtualDesktop=*/0, QString(), QStringLiteral("snapping"));
         const QUuid userRuleId = userRule.id;
@@ -758,7 +1017,7 @@ private Q_SLOTS:
         QVERIFY(ConfigMigration::ensureJsonConfig());
 
         // The user's rule MUST survive — windowrules.json was not rebuilt.
-        auto afterRerun = PhosphorWindowRule::WindowRuleSet::loadFromFile(ConfigDefaults::windowRulesFilePath());
+        auto afterRerun = PhosphorWindowRules::WindowRuleSet::loadFromFile(ConfigDefaults::windowRulesFilePath());
         QVERIFY2(afterRerun.has_value(), "windowrules.json must still parse as a v4 rule set after the re-run");
         QVERIFY2(afterRerun->ruleById(userRuleId).has_value(),
                  "the user-authored rule must survive a re-run with assignments.json still present");
@@ -1533,7 +1792,7 @@ private Q_SLOTS:
         // (hand-written JSON would silently drift if the library tightens
         // its load contract, flipping windowRulesAlreadyConverted to false
         // and silently rebuilding instead of taking the cleanup branch).
-        PhosphorWindowRule::WindowRuleSet emptySet;
+        PhosphorWindowRules::WindowRuleSet emptySet;
         QDir().mkpath(QFileInfo(ConfigDefaults::windowRulesFilePath()).absolutePath());
         QVERIFY(emptySet.saveToFile(ConfigDefaults::windowRulesFilePath()));
         const QByteArray windowRulesBefore = [&] {

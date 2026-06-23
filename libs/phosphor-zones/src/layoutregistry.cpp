@@ -16,7 +16,7 @@
 
 namespace PhosphorZones {
 
-LayoutRegistry::LayoutRegistry(PhosphorWindowRule::WindowRuleStore* ruleStore, QString layoutSubdirectory,
+LayoutRegistry::LayoutRegistry(PhosphorWindowRules::WindowRuleStore* ruleStore, QString layoutSubdirectory,
                                QObject* parent)
     : IZoneLayoutRegistry(parent)
     , m_ruleStore(ruleStore)
@@ -53,7 +53,7 @@ void LayoutRegistry::initCommon()
 
     // One evaluation model — bound to the store's live rule set. The store
     // owns the set's lifetime; the evaluator holds a reference to it.
-    m_evaluator = std::make_unique<PhosphorWindowRule::RuleEvaluator>(m_ruleStore->ruleSet());
+    m_evaluator = std::make_unique<PhosphorWindowRules::RuleEvaluator>(m_ruleStore->ruleSet());
 
     // Forward the detailed layoutsChanged signal into the unified
     // ILayoutSourceRegistry::contentsChanged notifier so any subscribed
@@ -81,12 +81,33 @@ void LayoutRegistry::setSnappingPreferredProvider(std::function<bool()> provider
     m_snappingPreferredProvider = std::move(provider);
 }
 
+void LayoutRegistry::setDefaultAssignmentSuppressedProvider(std::function<bool()> provider)
+{
+    m_defaultAssignmentSuppressedProvider = std::move(provider);
+}
+
 bool LayoutRegistry::snappingPreferred() const
 {
     return m_snappingPreferredProvider && m_snappingPreferredProvider();
 }
 
 AssignmentEntry LayoutRegistry::resolveDefaultAssignmentEntry() const
+{
+    // Global suppress gate. When the user has opted to suppress the synthesized
+    // default assignment, no unassigned context gets a level-1 default — the
+    // result is a default-constructed (invalid) entry whose activeLayoutId() is
+    // empty, the SAME effective state as a system with no default providers
+    // configured. The daemon's existing "empty entry ⇒ no default, no active
+    // engine" handling therefore covers it with no further change. The
+    // per-context "allow" override bypasses this by calling the raw sibling
+    // directly (see resolveDefaultAssignmentEntryForContext).
+    if (m_defaultAssignmentSuppressedProvider && m_defaultAssignmentSuppressedProvider()) {
+        return AssignmentEntry{};
+    }
+    return resolveDefaultAssignmentEntryRaw();
+}
+
+AssignmentEntry LayoutRegistry::resolveDefaultAssignmentEntryRaw() const
 {
     // Level-1 global default. Resolution order:
     //
@@ -227,6 +248,14 @@ PhosphorZones::Layout* LayoutRegistry::cycleLayoutImpl(const QString& screenId, 
             : screenId;
     }
 
+    // Per-output virtual desktops (#648): cycle relative to the target screen's
+    // OWN desktop, not the global active one, so the visibility filter and the
+    // reference-layout lookup below resolve against the same desktop the screen
+    // is actually showing. Falls back to the global desktop when no screen is
+    // known (empty screenId) or no per-output value is on record.
+    const int desktop =
+        resolvedScreenId.isEmpty() ? m_currentVirtualDesktop : currentVirtualDesktopForScreen(resolvedScreenId);
+
     // Build filtered list of visible layouts for current context
     QVector<PhosphorZones::Layout*> visible;
     for (PhosphorZones::Layout* l : m_layouts) {
@@ -238,8 +267,8 @@ PhosphorZones::Layout* LayoutRegistry::cycleLayoutImpl(const QString& screenId, 
                 continue;
             }
         }
-        if (m_currentVirtualDesktop > 0 && !l->allowedDesktops().isEmpty()) {
-            if (!l->allowedDesktops().contains(m_currentVirtualDesktop)) {
+        if (desktop > 0 && !l->allowedDesktops().isEmpty()) {
+            if (!l->allowedDesktops().contains(desktop)) {
                 continue;
             }
         }
@@ -258,7 +287,7 @@ PhosphorZones::Layout* LayoutRegistry::cycleLayoutImpl(const QString& screenId, 
     // Use per-screen layout as reference for cycling so each screen cycles independently
     PhosphorZones::Layout* currentLayout = nullptr;
     if (!resolvedScreenId.isEmpty()) {
-        currentLayout = layoutForScreen(resolvedScreenId, m_currentVirtualDesktop, m_currentActivity);
+        currentLayout = layoutForScreen(resolvedScreenId, desktop, m_currentActivity);
     }
     if (!currentLayout) {
         currentLayout = defaultLayout();
@@ -292,14 +321,19 @@ void LayoutRegistry::applyLayoutToScreen(const QString& screenId, PhosphorZones:
     // Per-screen assignment: write per-desktop assignment first so the
     // layoutAssigned handler recalculates zone geometry for this screen.
     if (!screenId.isEmpty()) {
+        // Per-output virtual desktops (#648): write to the screen's OWN desktop,
+        // not the global active one. Both callers (cycleLayoutImpl and the D-Bus
+        // applyQuickLayout via LayoutAdaptor) pass an already idForName-resolved
+        // screenId, matching the per-output map's key.
+        const int desktop = currentVirtualDesktopForScreen(screenId);
         // Write per-desktop assignment with empty activity so it applies
         // regardless of which activity is active. Activity-specific
         // overrides are a separate KCM-only feature. Clear any stale
         // activity-keyed entry that would shadow this one in the cascade.
         if (!m_currentActivity.isEmpty()) {
-            clearAssignment(screenId, m_currentVirtualDesktop, m_currentActivity);
+            clearAssignment(screenId, desktop, m_currentActivity);
         }
-        assignLayout(screenId, m_currentVirtualDesktop, QString(), layout);
+        assignLayout(screenId, desktop, QString(), layout);
     }
     // Update the global active layout pointer (for overlay/zone detector
     // queries) but suppress activeLayoutChanged to prevent resnap buffer
@@ -364,6 +398,14 @@ void LayoutRegistry::removeLayout(PhosphorZones::Layout* layout)
 
     // Delete layout file (using stored path)
     QFile::remove(filePath);
+
+    // Drop the layout's settings sidecar entry. For a user override being
+    // deleted to restore the system original, this is also what we want — the
+    // restored system layout should not inherit the user's custom settings.
+    m_layoutSettings.removeLayout(layoutIdStr);
+    if (!m_layoutSettings.saveToFile(layoutSettingsFilePath())) {
+        qCWarning(lcZonesLib) << "Failed to persist layout settings sidecar after removing" << layoutIdStr;
+    }
 
     // Clear every pointer that could capture the about-to-deleteLater
     // layout. m_previousLayout is obvious. m_activeLayout is the subtle

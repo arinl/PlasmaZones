@@ -87,7 +87,9 @@ QString KWinCompositorBridge::windowScreenId(WindowHandle w) const
 QRectF KWinCompositorBridge::frameGeometry(WindowHandle w) const
 {
     auto* ew = toEffectWindow(w);
-    return ew ? ew->frameGeometry() : QRectF();
+    // KWin 6.7: EffectWindow::frameGeometry() returns KWin::RectF; convert so
+    // both ternary branches share the QRectF type this bridge exposes.
+    return ew ? QRectF(ew->frameGeometry()) : QRectF();
 }
 
 QSizeF KWinCompositorBridge::minSize(WindowHandle w) const
@@ -264,12 +266,12 @@ void KWinCompositorBridge::raiseWindow(WindowHandle w)
     }
 }
 
-void KWinCompositorBridge::applySnapGeometry(WindowHandle w, const QRectF& geometry, bool skipAnimation)
+void KWinCompositorBridge::applyWindowGeometry(WindowHandle w, const QRectF& geometry, bool skipAnimation)
 {
     auto* ew = toEffectWindow(w);
     if (!ew)
         return;
-    m_effect.applySnapGeometry(ew, GeometryHelpers::snapToRect(geometry), false, skipAnimation);
+    m_effect.applyWindowGeometry(ew, GeometryHelpers::snapToRect(geometry), false, skipAnimation);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

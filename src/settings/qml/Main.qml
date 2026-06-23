@@ -110,7 +110,84 @@ PhosphorUi.SettingsAppWindow {
     // — same UX as the legacy hand-rolled unsavedChangesDialog, but
     // the framework owns the dialog and the close orchestration.
     closePromptShowsApply: true
+
+    // Global search in the header toolbar (headerExtras slot). It supersedes the
+    // in-sidebar page-tree filter, which is disabled in Component.onCompleted.
+    headerExtras: Component {
+        GlobalSearchField {
+            // Declared inline in Main.qml, so it can reach `window` to feed the
+            // page-step shortcut guard while the results dropdown is open.
+            onSearchOpenChanged: window._searchOpen = searchOpen
+        }
+    }
+
+    // Daemon status, right-aligned on the search row: pulsing colored dot
+    // (positive when running, negative when stopped) + Running/Stopped label +
+    // enable/disable switch.
+    headerTrailing: Component {
+        RowLayout {
+            spacing: Kirigami.Units.smallSpacing
+
+            Rectangle {
+                id: daemonDot
+
+                Layout.alignment: Qt.AlignVCenter
+                width: Kirigami.Units.smallSpacing * 1.5
+                height: Kirigami.Units.smallSpacing * 1.5
+                radius: width / 2
+                color: settingsController.daemonRunning ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
+
+                SequentialAnimation on opacity {
+                    loops: Animation.Infinite
+                    running: settingsController.daemonRunning
+
+                    PhosphorMotionAnimation {
+                        from: 1
+                        to: 0.4
+                        profile: "widget.pulse.slow"
+                    }
+
+                    PhosphorMotionAnimation {
+                        from: 0.4
+                        to: 1
+                        profile: "widget.pulse.slow"
+                    }
+                }
+            }
+
+            Label {
+                text: settingsController.daemonRunning ? i18n("Running") : i18n("Stopped")
+                opacity: 0.7
+                Layout.alignment: Qt.AlignVCenter
+            }
+
+            SettingsSwitch {
+                Layout.alignment: Qt.AlignVCenter
+                checked: settingsController.daemonRunning
+                enabled: !settingsController.daemonController.busy
+                accessibleName: i18n("Toggle daemon")
+                // The switch is fully controlled (checked is bound to
+                // daemonRunning and never self-toggles), so it stays visually
+                // "on" until the daemon actually stops. Turning OFF kills tiling
+                // + snapping for the whole session, so confirm first; turning ON
+                // applies immediately.
+                // Routes through the root-level daemonStopConfirm (declared
+                // beside the other inline confirm dialogs) so the page-nav
+                // shortcut guard can see its `visible` state.
+                onToggled: function (newValue) {
+                    if (newValue)
+                        settingsController.daemonController.setEnabled(true);
+                    else
+                        daemonStopConfirm.open();
+                }
+            }
+        }
+    }
+
     Component.onCompleted: {
+        // The header search supersedes the sidebar's page-tree search.
+        window.sidebar.searchEnabled = false;
+
         var geo = settingsController.loadWindowGeometry();
         if (geo.width > 0 && geo.height > 0) {
             window.width = geo.width;
@@ -259,7 +336,8 @@ PhosphorUi.SettingsAppWindow {
     // ── Ctrl+PgUp / Ctrl+PgDown — step through navigable pages ──────
     // Guarded: page navigation must not fire while any of the inline
     // confirm dialogs (whatsNewDialog, resetConfirmDialog,
-    // defaultsConfirmDialog, sectionToggleDiscardConfirm), the shortcut
+    // defaultsConfirmDialog, sectionToggleDiscardConfirm, daemonStopConfirm),
+    // the shortcut
     // overlay, the active page's own modal stack (WindowRulesPage's
     // forceSaveConfirm / addRuleWizard / ruleEditorSheet /
     // windowPickerDialog), OR a native child window (QtQuick FileDialog,
@@ -286,10 +364,13 @@ PhosphorUi.SettingsAppWindow {
     /// Declared BEFORE `_navShortcutsEnabled` so a top-down reader
     /// sees the property's purpose before the guard that consumes it.
     property bool _pageOwnedModalOpen: false
+    /// True while the global search dropdown is open — suppresses page-step
+    /// shortcuts so ↑/↓/Enter drive the results list, not page navigation.
+    property bool _searchOpen: false
     // Shared enable-guard for page-navigation shortcuts. Hoisted from
     // the two identical inline expressions so a future dialog addition
     // doesn't drift between Ctrl+PgUp / Ctrl+PgDown.
-    readonly property bool _navShortcutsEnabled: window.active && !whatsNewDialog.visible && !resetConfirmDialog.visible && !defaultsConfirmDialog.visible && !sectionToggleDiscardConfirm.visible && !window._showShortcuts && !window._pageOwnedModalOpen
+    readonly property bool _navShortcutsEnabled: window.active && !whatsNewDialog.visible && !resetConfirmDialog.visible && !defaultsConfirmDialog.visible && !sectionToggleDiscardConfirm.visible && !daemonStopConfirm.visible && !window._showShortcuts && !window._pageOwnedModalOpen && !window._searchOpen
 
     Shortcut {
         sequence: "Ctrl+PgUp"
@@ -786,6 +867,28 @@ PhosphorUi.SettingsAppWindow {
         ]
     }
 
+    // Confirm before stopping the daemon from the header toggle. Declared at the
+    // window root (not in the headerTrailing Component) so the page-nav shortcut
+    // guard `_navShortcutsEnabled` can read its `visible` state; the header
+    // SettingsSwitch opens it via outer-scope reference.
+    Kirigami.PromptDialog {
+        id: daemonStopConfirm
+
+        title: i18n("Stop daemon?")
+        subtitle: i18n("Stopping the PlasmaZones daemon disables window tiling and snapping until you start it again.")
+        standardButtons: Kirigami.Dialog.Cancel
+        customFooterActions: [
+            Kirigami.Action {
+                text: i18n("Stop daemon")
+                icon.name: "system-shutdown"
+                onTriggered: {
+                    settingsController.daemonController.setEnabled(false);
+                    daemonStopConfirm.close();
+                }
+            }
+        ]
+    }
+
     // ── Keyboard-shortcut overlay ───────────────────────────────────
     KeyboardShortcutOverlay {
         parent: window.contentItem
@@ -812,86 +915,6 @@ PhosphorUi.SettingsAppWindow {
         interval: Kirigami.Units.veryLongDuration
         running: settingsController.hasUnseenWhatsNew
         onTriggered: whatsNewDialog.open()
-    }
-
-    // Sticky daemon-status footer at the bottom of the sidebar, always
-    // visible regardless of which page is active. Mirrors the legacy
-    // chrome's persistent status Pane: pulsing colored dot (positive
-    // when running, negative when stopped) + Running/Stopped label +
-    // enable/disable SettingsSwitch.
-    sidebar.footerContent: Component {
-        Pane {
-            padding: Kirigami.Units.smallSpacing * 1.5
-            topPadding: Kirigami.Units.smallSpacing * 2
-            bottomPadding: Kirigami.Units.smallSpacing * 2
-
-            background: Rectangle {
-                color: "transparent"
-
-                Rectangle {
-                    anchors.top: parent.top
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    height: Math.round(Screen.devicePixelRatio)
-                    // Subtle theme-tinted hairline. Same shape as the
-                    // KeyboardShortcutOverlay subtleBorder + Toast
-                    // toastBg tints documented in E32; future tweaks
-                    // should go through PhosphorUi.ThemeHelpers when
-                    // it's exposed publicly. For now we accept the
-                    // copy here (3 sites, low churn).
-                    color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.1)
-                }
-            }
-
-            contentItem: RowLayout {
-                spacing: Kirigami.Units.smallSpacing
-
-                Rectangle {
-                    id: daemonDot
-
-                    width: Kirigami.Units.smallSpacing * 1.5
-                    height: Kirigami.Units.smallSpacing * 1.5
-                    radius: width / 2
-                    Layout.alignment: Qt.AlignVCenter
-                    color: settingsController.daemonRunning ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.negativeTextColor
-
-                    SequentialAnimation on opacity {
-                        loops: Animation.Infinite
-                        running: settingsController.daemonRunning
-
-                        PhosphorMotionAnimation {
-                            from: 1
-                            to: 0.4
-                            profile: "widget.pulse.slow"
-                        }
-
-                        PhosphorMotionAnimation {
-                            from: 0.4
-                            to: 1
-                            profile: "widget.pulse.slow"
-                        }
-                    }
-                }
-
-                Label {
-                    text: settingsController.daemonRunning ? i18n("Running") : i18n("Stopped")
-                    opacity: 0.7
-                    Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignVCenter
-                    visible: !window.sidebarCompact
-                }
-
-                SettingsSwitch {
-                    Layout.alignment: Qt.AlignVCenter
-                    checked: settingsController.daemonRunning
-                    enabled: !settingsController.daemonController.busy
-                    accessibleName: i18n("Toggle daemon")
-                    onToggled: function (newValue) {
-                        settingsController.daemonController.setEnabled(newValue);
-                    }
-                }
-            }
-        }
     }
 
     // Per-row sidebar trailing content — a Row with two slots:

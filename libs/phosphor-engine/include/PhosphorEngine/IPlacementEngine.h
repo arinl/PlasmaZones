@@ -23,6 +23,8 @@ class QObject;
 
 namespace PhosphorEngine {
 
+class ICrossSurfaceResolver;
+
 /// Unified placement engine interface.
 ///
 /// ## Required vs Optional Methods
@@ -331,6 +333,24 @@ public:
         return {};
     }
 
+    /// Notify the engine that a tracked window finished an interactive resize.
+    ///
+    /// The daemon's WindowTracking adaptor forwards the compositor's
+    /// interactive-resize-finished event here so an engine can reflow the rest
+    /// of its layout to absorb the change (autotile fills the freed gap;
+    /// GitHub #652). @p oldFrame / @p newFrame are the window's frame geometry
+    /// before and after the resize; @p screenId is the screen the daemon
+    /// resolved the window to. Default is a no-op for engines (e.g. snap) that
+    /// have no neighbour-reflow model.
+    virtual void onWindowResized(const QString& windowId, const QRect& oldFrame, const QRect& newFrame,
+                                 const QString& screenId)
+    {
+        Q_UNUSED(windowId)
+        Q_UNUSED(oldFrame)
+        Q_UNUSED(newFrame)
+        Q_UNUSED(screenId)
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Cross-engine handoff
     //
@@ -366,10 +386,21 @@ public:
         QString windowId;
         QString fromEngineId; ///< source engine identity ("snap" / "autotile" / "")
         QString toScreenId; ///< destination screen (must be owned by `to` engine)
+        int toDesktop = 0; ///< destination virtual desktop (1-based); 0 = current
+                           ///< desktop (drag-drop / same-desktop monitor crossing).
+                           ///< Set for a cross-VIRTUAL-DESKTOP handoff so the
+                           ///< receiver places the window in the target desktop's
+                           ///< state/layout, not the currently-visible one.
         QPoint dropPos; ///< cursor position at drop, or invalid for non-drag handoffs
         QRect sourceGeometry; ///< window's frame at handoff time (for size preservation)
         QStringList sourceZoneIds; ///< zones the window held at source (empty if not snapped)
         bool wasFloating = false; ///< window was floating in source engine
+        int insertIndex = -1; ///< autotile target: raw window-order index (position
+                              ///< in windowOrder(), counting floats — NOT the
+                              ///< tiled-only index) to insert at. -1 = insertion-order
+                              ///< policy. Used by a cross-mode SWAP so the arriving
+                              ///< window takes the departed partner's exact slot.
+                              ///< Ignored by snap targets.
     };
 
     /// Receive ownership of a window from another engine.
@@ -463,9 +494,34 @@ public:
     {
         Q_UNUSED(desktop)
     }
+    /// Set a single screen's current virtual desktop (Plasma 6.7 "switch desktops
+    /// independently for each screen"). A PURE context swap — it selects which
+    /// per-(screen, desktop) tiling state is current for this screen; it does NOT
+    /// migrate windows between desktop states (the other desktop's state must stay
+    /// put so it reappears when that screen returns). Default no-op for engines
+    /// that are not per-screen-desktop-aware.
+    virtual void setCurrentDesktopForScreen(const QString& screenId, int desktop)
+    {
+        Q_UNUSED(screenId)
+        Q_UNUSED(desktop)
+    }
+    /// Drop a screen's per-output desktop, reverting it to the global current.
+    virtual void clearCurrentDesktopForScreen(const QString& screenId)
+    {
+        Q_UNUSED(screenId)
+    }
     virtual void setCurrentActivity(const QString& activity)
     {
         Q_UNUSED(activity)
+    }
+    /// Inject the cross-surface resolver used to find a neighbouring output /
+    /// desktop when directional navigation reaches a surface boundary. The
+    /// resolver is borrowed, not owned; the caller must keep it alive for the
+    /// engine's lifetime (in the daemon it outlives both engines by member
+    /// order). Engines that don't support cross-surface navigation ignore it.
+    virtual void setCrossSurfaceResolver(ICrossSurfaceResolver* resolver)
+    {
+        Q_UNUSED(resolver)
     }
     virtual void updateStickyScreenPins(const std::function<bool(const QString&)>& isWindowSticky)
     {

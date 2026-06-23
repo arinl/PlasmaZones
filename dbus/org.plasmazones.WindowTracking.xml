@@ -305,6 +305,24 @@ SPDX-License-Identifier: GPL-3.0-or-later
                 <annotation name="org.gtk.GDBus.DocString" value="Window to activate."/>
             </arg>
         </signal>
+        <signal name="windowDesktopMoveRequested">
+            <annotation name="org.gtk.GDBus.DocString" value="Daemon requests KWin to move a window to a virtual desktop. Used by cross-desktop directional move; the effect calls windowToDesktops."/>
+            <arg name="windowId" type="s">
+                <annotation name="org.gtk.GDBus.DocString" value="Window to move."/>
+            </arg>
+            <arg name="desktop" type="i">
+                <annotation name="org.gtk.GDBus.DocString" value="Target virtual desktop (1-based)."/>
+            </arg>
+        </signal>
+        <signal name="windowOutputMoveExpected">
+            <annotation name="org.gtk.GDBus.DocString" value="Daemon-initiated cross-output move: the daemon already migrated its tiling state for the window onto targetScreenId and reflowed both outputs. The window's resulting outputChanged is expected; the effect updates bookkeeping and decoration only, without re-issuing windowClosed/windowOpened. User-drag cross-output moves carry no marker."/>
+            <arg name="windowId" type="s">
+                <annotation name="org.gtk.GDBus.DocString" value="Window the daemon moved across outputs."/>
+            </arg>
+            <arg name="targetScreenId" type="s">
+                <annotation name="org.gtk.GDBus.DocString" value="Destination screen the daemon migrated the window onto."/>
+            </arg>
+        </signal>
         <signal name="applyGeometriesBatch">
             <annotation name="org.gtk.GDBus.DocString" value="Daemon requests compositor to apply geometries for a batch of windows."/>
             <arg name="geometries" type="a(siiiis)">
@@ -325,6 +343,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
             <annotation name="org.gtk.GDBus.DocString" value="Report that the cursor has moved to a different screen. Called by KWin effect when cursor crosses monitor boundaries."/>
             <arg name="screenId" type="s" direction="in">
                 <annotation name="org.gtk.GDBus.DocString" value="Screen identifier the cursor is now on (e.g. Dell:U2722D:115107 or Dell:U2722D:115107/vs:0)."/>
+            </arg>
+        </method>
+        <method name="screenDesktopChanged">
+            <annotation name="org.gtk.GDBus.DocString" value="Report a screen's current virtual desktop (Plasma 6.7 per-output virtual desktops). Called by the KWin effect on KWin::EffectsHandler::desktopChanged with the per-output desktop. KWin's own D-Bus interface only exposes the global current desktop, so per-screen data arrives this way."/>
+            <arg name="screenId" type="s" direction="in">
+                <annotation name="org.gtk.GDBus.DocString" value="Physical screen identifier whose desktop changed (NOT virtual-screen-suffixed; per-output desktops belong to the physical output)."/>
+            </arg>
+            <arg name="desktop" type="i" direction="in">
+                <annotation name="org.gtk.GDBus.DocString" value="The screen's current virtual desktop, 1-based (x11DesktopNumber)."/>
             </arg>
         </method>
         <method name="setWindowMetadata">
@@ -356,6 +383,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
             <arg name="windowType" type="i" direction="in">
                 <annotation name="org.gtk.GDBus.DocString" value="PhosphorProtocol::WindowType underlying value; out-of-range values are clamped to Unknown."/>
             </arg>
+            <arg name="extended" type="a{sv}" direction="in">
+                <annotation name="org.gtk.GDBus.DocString" value="Extended window-property snapshot (state flags, geometry, accessory flags, captionNormal) keyed by PhosphorProtocol::Service::WindowMetadataKey. A key is present only when the value is known, so absent keys leave the derived window-rule field disengaged. Lets the daemon's Float/RestorePosition resolvers match the same KWin-property fields the effect path resolves live."/>
+            </arg>
         </method>
         <method name="windowClosed">
             <annotation name="org.gtk.GDBus.DocString" value="Notify daemon that a window was closed (cleanup). The window's structural kind is captured into the PendingRestore entry if one is recorded, so the consume path can refuse to assign that entry to a window of a different kind on reopen."/>
@@ -364,6 +394,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
             </arg>
             <arg name="windowKind" type="i" direction="in">
                 <annotation name="org.gtk.GDBus.DocString" value="Structural kind of the closing window (0=Unknown, 1=Normal, 2=Transient). Recorded on the PendingRestore entry if one is enqueued. Pass 0 to opt out of the gate (legacy callers)."/>
+            </arg>
+            <arg name="screenId" type="s" direction="in">
+                <annotation name="org.gtk.GDBus.DocString" value="The window's authoritative current screen at close (KWin's getWindowScreenId). Used by the final placement capture to record the float-back on the screen the window actually closed on, even when a cross-screen move has torn down both engines' tracking. Empty opts out (legacy callers)."/>
             </arg>
         </method>
         <method name="windowActivated">
@@ -384,6 +417,20 @@ SPDX-License-Identifier: GPL-3.0-or-later
             <arg name="y" type="i" direction="in"/>
             <arg name="width" type="i" direction="in"/>
             <arg name="height" type="i" direction="in"/>
+        </method>
+        <method name="notifyWindowResized">
+            <annotation name="org.gtk.GDBus.DocString" value="Notify the daemon that a tiled window finished an interactive edge/border resize. The autotile engine reflows neighbouring windows to fill the gap (GitHub #652). Fire-and-forget; the resize is already committed in the compositor. The old/new frames are the window's geometry before and after the resize, supplied by the compositor plugin (the daemon's debounced frame shadow is unreliable as a baseline because it updates during the drag). Floating, untracked, snap-mode, and cross-output windows are ignored daemon-side."/>
+            <arg name="windowId" type="s" direction="in">
+                <annotation name="org.gtk.GDBus.DocString" value="Window identifier."/>
+            </arg>
+            <arg name="oldX" type="i" direction="in"/>
+            <arg name="oldY" type="i" direction="in"/>
+            <arg name="oldWidth" type="i" direction="in"/>
+            <arg name="oldHeight" type="i" direction="in"/>
+            <arg name="newX" type="i" direction="in"/>
+            <arg name="newY" type="i" direction="in"/>
+            <arg name="newWidth" type="i" direction="in"/>
+            <arg name="newHeight" type="i" direction="in"/>
         </method>
         <method name="setWindowSticky">
             <annotation name="org.gtk.GDBus.DocString" value="Set whether a window is sticky (visible on all virtual desktops)."/>

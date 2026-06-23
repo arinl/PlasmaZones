@@ -3,6 +3,7 @@
 
 // Qt headers
 #include <algorithm>
+#include <cmath>
 #include <QDebug>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -10,6 +11,7 @@
 #include <QScopeGuard>
 #include <QScreen>
 #include <QTimer>
+#include <QVarLengthArray>
 
 // Project headers
 #include <PhosphorTileEngine/AutotileEngine.h>
@@ -23,6 +25,7 @@
 #include <PhosphorTiles/TilingAlgorithm.h>
 // DwindleMemoryAlgorithm.h no longer needed — prepareTilingState() is virtual on PhosphorTiles::TilingAlgorithm
 #include <PhosphorTiles/TilingState.h>
+#include <PhosphorTiles/SplitTree.h>
 #include <PhosphorEngine/PerScreenKeys.h>
 #include <PhosphorTiles/AutotileConstants.h>
 #include <PhosphorZones/Layout.h>
@@ -56,6 +59,38 @@ T* checkedCast(QObject* obj, const char* context)
         qCWarning(PhosphorTileEngine::lcTileEngine) << context << ": QObject is not the expected type — skipping";
     }
     return concrete;
+}
+
+// Union the rendered zones of every leaf under @p node into @p bbox. Leaves are
+// matched to zones by looking their window id up in @p tiled (parallel to
+// @p zones), so this makes no assumption about leaf/zone ordering. Depth-guarded
+// like the rest of the SplitTree recursion.
+void unionSubtreeZones(const PhosphorTiles::SplitNode* node, const QStringList& tiled, const QVector<QRect>& zones,
+                       QRect& bbox, int depth = 0)
+{
+    if (!node || depth > PhosphorTiles::AutotileDefaults::MaxRuntimeTreeDepth) {
+        return;
+    }
+    if (node->isLeaf()) {
+        const int idx = tiled.indexOf(node->windowId);
+        if (idx >= 0 && idx < zones.size()) {
+            bbox = bbox.united(zones[idx]);
+        }
+        return;
+    }
+    unionSubtreeZones(node->first.get(), tiled, zones, bbox, depth + 1);
+    unionSubtreeZones(node->second.get(), tiled, zones, bbox, depth + 1);
+}
+
+// The rendered extent of a split = bounding box of its subtree's zones. Read
+// from the currently rendered zones (not recomputed from the tree) so the
+// interactive-resize edge→ratio math stays in the same coordinate space as the
+// compositor-reported window frame.
+QRect subtreeBoundingRect(const PhosphorTiles::SplitNode* split, const QStringList& tiled, const QVector<QRect>& zones)
+{
+    QRect bbox;
+    unionSubtreeZones(split, tiled, zones, bbox);
+    return bbox;
 }
 
 } // namespace
@@ -191,7 +226,8 @@ void AutotileEngine::onWindowZoneChanged(const QString& windowId, const QString&
         return;
     if (zoneId.isEmpty()) {
         for (auto it = m_screenStates.constBegin(); it != m_screenStates.constEnd(); ++it) {
-            if (it.key().desktop != m_currentDesktop || it.key().activity != m_currentActivity) {
+            if (it.key().desktop != currentKeyForScreen(it.key().screenId).desktop
+                || it.key().activity != m_currentActivity) {
                 continue;
             }
             if (it.value() && it.value()->isFloating(windowId)) {
@@ -299,6 +335,8 @@ void AutotileEngine::connectSignals()
                         releaseScreenStateForTeardown(sid, it.value(), releasedWindows,
                                                       /*drainOverflow=*/false);
                         m_configResolver->removeOverridesForScreen(sid);
+                        m_userTunedSplitRatio.remove(it.key());
+                        m_userTunedMasterCount.remove(it.key());
                         it.remove();
                     }
                     for (const QString& sid : std::as_const(orphanedVsIds)) {
@@ -323,18 +361,29 @@ void AutotileEngine::connectSignals()
                         Q_EMIT settingsPersistRequested();
                     }
 
-                    // Clean up desktop overrides for removed virtual screens on this physical screen.
-                    // Use newVsSet (freshly-computed from PhosphorScreens::ScreenManager) rather than
-                    // m_autotileScreens which reflects mode assignments and may not yet be updated for the new config.
+                    // Clean up per-screen desktop maps for removed virtual screens on this
+                    // physical screen — BOTH the sticky-pin override and the per-output-VD
+                    // map (#648). Use newVsSet (freshly-computed from
+                    // PhosphorScreens::ScreenManager) rather than m_autotileScreens which
+                    // reflects mode assignments and may not yet be updated for the new config.
+                    const auto isOrphanedVsOfThisPhysical = [&](const QString& key) {
+                        return PhosphorIdentity::VirtualScreenId::isVirtual(key)
+                            && PhosphorIdentity::VirtualScreenId::extractPhysicalId(key) == physicalScreenId
+                            && !newVsSet.contains(key);
+                    };
                     auto overrideIt = m_screenDesktopOverride.begin();
                     while (overrideIt != m_screenDesktopOverride.end()) {
-                        if (PhosphorIdentity::VirtualScreenId::isVirtual(overrideIt.key())
-                            && PhosphorIdentity::VirtualScreenId::extractPhysicalId(overrideIt.key())
-                                == physicalScreenId
-                            && !newVsSet.contains(overrideIt.key()))
+                        if (isOrphanedVsOfThisPhysical(overrideIt.key()))
                             overrideIt = m_screenDesktopOverride.erase(overrideIt);
                         else
                             ++overrideIt;
+                    }
+                    auto perOutputIt = m_screenCurrentDesktop.begin();
+                    while (perOutputIt != m_screenCurrentDesktop.end()) {
+                        if (isOrphanedVsOfThisPhysical(perOutputIt.key()))
+                            perOutputIt = m_screenCurrentDesktop.erase(perOutputIt);
+                        else
+                            ++perOutputIt;
                     }
 
                     // Retile the new virtual screens
@@ -484,6 +533,36 @@ void AutotileEngine::setCurrentDesktop(int desktop)
     m_currentDesktop = desktop;
 }
 
+void AutotileEngine::setCurrentDesktopForScreen(const QString& screenId, int desktop)
+{
+    if (screenId.isEmpty() || desktop < 1) {
+        return;
+    }
+    const int previous = m_screenCurrentDesktop.value(screenId, m_currentDesktop);
+    if (previous == desktop) {
+        // Same per-screen desktop still establishes the context (mirrors the
+        // same-desktop branch of setCurrentDesktop for the startup push).
+        m_desktopContextEverSet = true;
+        return;
+    }
+    qCInfo(PhosphorTileEngine::lcTileEngine)
+        << "Switching autotile context for screen" << screenId << "desktop" << previous << "->" << desktop;
+    // PURE context swap — no state migration. The other desktop's TilingState for
+    // this screen stays put and reappears when the screen returns to it; migrating
+    // would destroy the per-desktop isolation that the (screen, desktop) keying
+    // exists to provide. Arm the (global) desktop-switch flag exactly like
+    // setCurrentDesktop so the effect's desktop-switch pass runs — over-broad
+    // across screens but idempotent (the catch-scan re-adds).
+    m_isDesktopContextSwitch |= m_desktopContextEverSet;
+    m_desktopContextEverSet = true;
+    m_screenCurrentDesktop.insert(screenId, desktop);
+}
+
+void AutotileEngine::clearCurrentDesktopForScreen(const QString& screenId)
+{
+    m_screenCurrentDesktop.remove(screenId);
+}
+
 void AutotileEngine::setCurrentActivity(const QString& activity)
 {
     if (activity == m_currentActivity) {
@@ -558,10 +637,16 @@ void AutotileEngine::updateStickyScreenPins(const std::function<bool(const QStri
                 qCInfo(PhosphorTileEngine::lcTileEngine)
                     << "Unpinning screen" << screenId << "from desktop" << pinnedDesktop;
 
-                // Migrate PhosphorTiles::TilingState from pinned key to current desktop key
-                if (pinnedDesktop != m_currentDesktop) {
+                // Migrate PhosphorTiles::TilingState from the pinned key to this
+                // screen's CURRENT desktop key. The sticky-pin override was just
+                // removed above, so currentKeyForScreen now resolves the screen's
+                // effective desktop — its per-output virtual desktop under Plasma
+                // 6.7 (#648), else the global m_currentDesktop. Identical to
+                // m_currentDesktop when per-output desktops aren't in use.
+                const int targetDesktop = currentKeyForScreen(screenId).desktop;
+                if (pinnedDesktop != targetDesktop) {
                     TilingStateKey oldKey{screenId, pinnedDesktop, m_currentActivity};
-                    TilingStateKey newKey{screenId, m_currentDesktop, m_currentActivity};
+                    TilingStateKey newKey{screenId, targetDesktop, m_currentActivity};
 
                     auto oldIt = m_screenStates.find(oldKey);
                     if (oldIt != m_screenStates.end()) {
@@ -577,6 +662,21 @@ void AutotileEngine::updateStickyScreenPins(const std::function<bool(const QStri
                         m_screenStates.erase(oldIt);
                         m_screenStates.insert(newKey, migratedState);
 
+                        // The migrated state keeps its split ratio / master count, so
+                        // carry its per-key user-tuned flags from oldKey to newKey; if
+                        // it wasn't tuned, ensure newKey isn't left tuned by the
+                        // replaced state deleted above.
+                        if (m_userTunedSplitRatio.remove(oldKey)) {
+                            m_userTunedSplitRatio.insert(newKey);
+                        } else {
+                            m_userTunedSplitRatio.remove(newKey);
+                        }
+                        if (m_userTunedMasterCount.remove(oldKey)) {
+                            m_userTunedMasterCount.insert(newKey);
+                        } else {
+                            m_userTunedMasterCount.remove(newKey);
+                        }
+
                         // Update window-to-key mapping
                         for (auto wit = m_windowToStateKey.begin(); wit != m_windowToStateKey.end(); ++wit) {
                             if (wit.value() == oldKey) {
@@ -586,7 +686,7 @@ void AutotileEngine::updateStickyScreenPins(const std::function<bool(const QStri
 
                         qCInfo(PhosphorTileEngine::lcTileEngine)
                             << "Migrated screen" << screenId << "state from desktop" << pinnedDesktop << "to"
-                            << m_currentDesktop;
+                            << targetDesktop;
                     }
                 }
             }
@@ -730,7 +830,7 @@ void AutotileEngine::setAutotileScreens(const QSet<QString>& screens)
         // windowOpened migration) and reaped wholesale by
         // pruneStatesForDesktop / pruneStatesForActivities when their
         // desktop or activity is destroyed.
-        if (key.desktop != m_currentDesktop || key.activity != m_currentActivity) {
+        if (key.desktop != currentKeyForScreen(key.screenId).desktop || key.activity != m_currentActivity) {
             continue;
         }
         if (!removed.contains(key.screenId)) {
@@ -744,6 +844,8 @@ void AutotileEngine::setAutotileScreens(const QSet<QString>& screens)
         // orphaned-virtual-screen teardown, which purges both layers because
         // a dead VS id is never reused.
         m_configResolver->removeOverridesForScreen(key.screenId);
+        m_userTunedSplitRatio.remove(key);
+        m_userTunedMasterCount.remove(key);
         it.remove();
     }
     // Clean up m_windowToStateKey entries for released windows BEFORE emitting
@@ -769,9 +871,11 @@ void AutotileEngine::setAutotileScreens(const QSet<QString>& screens)
     // toggle-off while another context holds overflow on the same screen.
     m_overflow.clearForRemovedScreens(m_autotileScreens);
 
-    // Clear desktop overrides for removed screens
+    // Clear per-screen desktop maps for removed screens — both the sticky-pin
+    // override and the per-output-VD map (#648).
     for (const QString& screenId : removed) {
         m_screenDesktopOverride.remove(screenId);
+        m_screenCurrentDesktop.remove(screenId);
     }
 
     // Clear any pending deferred retiles and retry state for removed screens
@@ -840,6 +944,13 @@ void AutotileEngine::setAlgorithm(const QString& algorithmId)
     if (m_algorithmId == newId) {
         return;
     }
+
+    // Switching algorithms resets ratios/counts to the new algorithm's saved or
+    // default values, so per-desktop user tunings no longer apply — drop them all.
+    // The propagate calls below re-seed the current-context states synchronously;
+    // other desktops re-seed on their own next propagate.
+    m_userTunedSplitRatio.clear();
+    m_userTunedMasterCount.clear();
 
     PhosphorTiles::TilingAlgorithm* oldAlgo = registry->algorithm(m_algorithmId);
     PhosphorTiles::TilingAlgorithm* newAlgo = registry->algorithm(newId);
@@ -939,6 +1050,18 @@ void AutotileEngine::setAlgorithm(const QString& algorithmId)
         for (auto* state : m_screenStates) {
             state->clearSplitTree();
         }
+    }
+
+    // Clear the per-algorithm script-state bag on every switch. It is opaque
+    // state private to the previous algorithm (e.g. an aligned grid's column
+    // fractions) with no meaning to the next — a different scripted algorithm
+    // that also opts into supportsScriptState must not inherit it. Unlike the
+    // split tree above (which two memory algorithms can meaningfully share),
+    // script state has no cross-algorithm validity, so this is unconditional.
+    // Safe because this point is reached only when the algorithm id changed
+    // (early return above).
+    for (auto* state : m_screenStates) {
+        state->setScriptState({});
     }
 
     Q_EMIT algorithmChanged(m_algorithmId);
@@ -1059,6 +1182,10 @@ void AutotileEngine::pruneStatesForDesktop(int removedDesktop)
     while (it.hasNext()) {
         it.next();
         if (it.key().desktop == removedDesktop) {
+            // Drop the per-key user-tuned flags with the state so a reused desktop
+            // number can't inherit a stale "tuned" skip in propagateGlobal*.
+            m_userTunedSplitRatio.remove(it.key());
+            m_userTunedMasterCount.remove(it.key());
             it.value()->deleteLater();
             it.remove();
             ++pruned;
@@ -1082,6 +1209,16 @@ void AutotileEngine::pruneStatesForDesktop(int removedDesktop)
             oit.remove();
         }
     }
+    // Same for the per-output virtual-desktop map (#648) — a screen pinned to a
+    // now-deleted desktop number must drop the entry; the effect re-reports the
+    // screen's true (renumbered) desktop shortly after.
+    QMutableHashIterator<QString, int> sit(m_screenCurrentDesktop);
+    while (sit.hasNext()) {
+        sit.next();
+        if (sit.value() == removedDesktop) {
+            sit.remove();
+        }
+    }
     if (pruned > 0) {
         qCInfo(PhosphorTileEngine::lcTileEngine)
             << "Pruned" << pruned << "TilingStates for removed desktop" << removedDesktop;
@@ -1097,6 +1234,8 @@ void AutotileEngine::pruneStatesForActivities(const QStringList& validActivities
         it.next();
         const QString& act = it.key().activity;
         if (!act.isEmpty() && !valid.contains(act)) {
+            m_userTunedSplitRatio.remove(it.key());
+            m_userTunedMasterCount.remove(it.key());
             it.value()->deleteLater();
             it.remove();
             ++pruned;
@@ -1230,7 +1369,14 @@ void AutotileEngine::refreshConfigFromSettings()
     } while (0)
 
     if (!m_writeBackGuardTimer.isActive()) {
-        SYNC_FIELD(masterCount, autotileMasterCount);
+        const int newMasterCount = s->autotileMasterCount();
+        if (m_config->masterCount != newMasterCount) {
+            m_config->masterCount = newMasterCount;
+            configChanged = true;
+            // An explicit global master-count change (settings) overrides any
+            // per-desktop tunings, which the propagate below then re-applies.
+            m_userTunedMasterCount.clear();
+        }
     }
     SYNC_FIELD(innerGap, autotileInnerGap);
     SYNC_FIELD(outerGap, autotileOuterGap);
@@ -1250,6 +1396,9 @@ void AutotileEngine::refreshConfigFromSettings()
         if (!qFuzzyCompare(1.0 + m_config->splitRatio, 1.0 + newRatio)) {
             m_config->splitRatio = newRatio;
             configChanged = true;
+            // An explicit global split-ratio change (settings) overrides any
+            // per-desktop tunings, which the propagate below then re-applies.
+            m_userTunedSplitRatio.clear();
         }
     }
     {
@@ -1365,6 +1514,16 @@ bool AutotileEngine::hasPerScreenOverride(const QString& screenId, const QString
 void AutotileEngine::updatePerScreenOverride(const QString& screenId, const QString& key, const QVariant& value)
 {
     m_configResolver->updatePerScreenOverride(screenId, key, value);
+}
+
+void AutotileEngine::noteSplitRatioUserTuned(const QString& screenId)
+{
+    m_userTunedSplitRatio.insert(currentKeyForScreen(screenId));
+}
+
+void AutotileEngine::noteMasterCountUserTuned(const QString& screenId)
+{
+    m_userTunedMasterCount.insert(currentKeyForScreen(screenId));
 }
 
 int AutotileEngine::effectiveInnerGap(const QString& screenId) const
@@ -1690,27 +1849,17 @@ void AutotileEngine::decreaseMasterRatio(qreal delta)
 
 void AutotileEngine::setGlobalSplitRatio(qreal ratio)
 {
+    // An explicit global set overrides any per-desktop tunings, matching the
+    // settings-refresh path — otherwise the next propagate would skip the
+    // just-set value on still-tuned current-desktop states.
+    m_userTunedSplitRatio.clear();
     m_navigation->setGlobalSplitRatio(ratio);
 }
 
 void AutotileEngine::setGlobalMasterCount(int count)
 {
+    m_userTunedMasterCount.clear();
     m_navigation->setGlobalMasterCount(count);
-}
-
-void AutotileEngine::syncShortcutAdjustmentToSettings()
-{
-    // Update per-algorithm saved settings so algorithm switches preserve the value
-    if (!m_algorithmId.isEmpty()) {
-        auto& entry = m_config->savedAlgorithmSettings[m_algorithmId];
-        entry.splitRatio = m_config->splitRatio;
-        entry.masterCount = m_config->masterCount;
-    }
-
-    {
-        m_writeBackGuardTimer.start();
-        writeBackTuning();
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1767,7 +1916,8 @@ void AutotileEngine::toggleFocusedWindowFloat()
     }
     if (!state) {
         for (auto it = m_screenStates.constBegin(); it != m_screenStates.constEnd(); ++it) {
-            if (it.value() && !it.value()->focusedWindow().isEmpty() && it.key().desktop == m_currentDesktop
+            if (it.value() && !it.value()->focusedWindow().isEmpty()
+                && it.key().desktop == currentKeyForScreen(it.key().screenId).desktop
                 && it.key().activity == m_currentActivity) {
                 screenId = it.key().screenId;
                 state = it.value();
@@ -1829,7 +1979,8 @@ void AutotileEngine::toggleWindowFloat(const QString& rawWindowId, const QString
     // states only — states for other desktops should not be considered.
     if (!state) {
         for (auto it = m_screenStates.constBegin(); it != m_screenStates.constEnd(); ++it) {
-            if (it.key().desktop != m_currentDesktop || it.key().activity != m_currentActivity) {
+            if (it.key().desktop != currentKeyForScreen(it.key().screenId).desktop
+                || it.key().activity != m_currentActivity) {
                 continue;
             }
             if (it.value() && it.value()->containsWindow(windowId)) {
@@ -1915,7 +2066,19 @@ void AutotileEngine::handoffReceive(const HandoffContext& ctx)
         handoffRelease(windowId);
     }
 
-    state->addWindow(windowId);
+    // Insert at the position dictated by the insertion-order setting (a
+    // directional cross-mode move should land where new windows land), except:
+    //   - a cross-mode SWAP carries an explicit insertIndex so the arriving
+    //     window takes the departed partner's exact slot;
+    //   - a drag-drop carrying a cursor position, which the drag-insert path
+    //     places separately — there we keep the simple append so the drop wins.
+    if (ctx.insertIndex >= 0 && ctx.dropPos.isNull()) {
+        state->addWindow(windowId, ctx.insertIndex);
+    } else if (ctx.dropPos.isNull()) {
+        insertWindowByConfigOrder(state, windowId);
+    } else {
+        state->addWindow(windowId);
+    }
     // Autotile-engine policy on receive: a window arriving as "floating in
     // the source" stays floating here too — drag-from-snap typically falls
     // into this branch, and the user's drop position is where they want it.
@@ -2292,50 +2455,52 @@ void AutotileEngine::windowFocused(const QString& rawWindowId, const QString& sc
     const TilingStateKey oldKey = tracked ? trackedIt.value() : TilingStateKey{};
     const QString oldScreen = oldKey.screenId;
     if (!screenId.isEmpty() && tracked) {
-        if (isAutotileScreen(screenId)) {
-            const TilingStateKey newKey = currentKeyForScreen(screenId);
-            // FULL key comparison, not just screenId: a focus event landing
-            // between setCurrentDesktop and the catch-scan's windowOpened
-            // re-announce (window moved to another desktop, same screen)
-            // changes the key's desktop dimension only. Refreshing the map
-            // without migrating would leave the window in the OLD desktop's
-            // TilingState as a permanent ghost — windowOpened's own
-            // ghost-removal then skips (map already equals newKey), the old
-            // desktop retiles around a window living elsewhere forever.
-            if (!(newKey == oldKey)) {
-                if (oldKey.screenId == screenId) {
-                    // Context-only delta (desktop/activity changed, screen
-                    // unchanged): the focus event may have OUTRUN the
-                    // daemon's context push (alt-tab to a window on another
-                    // desktop fires focus and desktop-change from different
-                    // D-Bus sources with no ordering guarantee). Migrating
-                    // now against a stale m_currentDesktop would yank a
-                    // correctly-tiled window into the wrong desktop's state
-                    // (visible flicker, order/float reset). Defer one event
-                    // loop pass — by then the in-flight context push has
-                    // been processed — and migrate only if the mismatch
-                    // persists. The map is left untouched here so the
-                    // catch-scan's windowOpened ghost-removal still detects
-                    // a genuine move in the meantime.
-                    QMetaObject::invokeMethod(
-                        this,
-                        [this, windowId, screenId]() {
-                            revalidateWindowContext(windowId, screenId);
-                        },
-                        Qt::QueuedConnection);
-                } else {
-                    m_windowToStateKey[windowId] = newKey;
-                    migrateWindowBetweenKeys(windowId, oldKey, screenId);
-                }
+        if (oldKey.screenId == screenId) {
+            // SAME SCREEN: the window has NOT moved monitors, so any key delta
+            // is a context-only delta — the current desktop/activity changed
+            // underneath the window, not the window's location. This fires when
+            // a focus/activation event for the previously-active window lands
+            // during a desktop switch: KWin re-activates the last-focused window
+            // (e.g. the active window when the user left the desktop), and that
+            // focus arrives with the daemon's current desktop already advanced.
+            //
+            // isAutotileScreen() is evaluated against the CURRENT desktop, so it
+            // reads FALSE here whenever the window's own desktop differs from the
+            // one just switched to — even though the screen IS autotile on the
+            // window's real desktop. The old code took that false reading as
+            // "window moved to a non-autotile screen" and removed it from its
+            // (still-live, off-desktop) TilingState, silently dropping the window
+            // from that desktop's tiling so the survivors reflowed on return.
+            //
+            // Never migrate or remove on a same-screen focus. Defer one event
+            // loop pass: revalidateWindowContext migrates ONLY if a real
+            // desktop/activity move persists after the in-flight context push
+            // settles, and leaves the window untouched in its owning state when
+            // the screen is still non-autotile then (the window genuinely
+            // belongs to another desktop — windowDesktopsChanged owns real
+            // desktop moves). The map is left untouched here so the catch-scan's
+            // windowOpened ghost-removal still detects a genuine move meanwhile.
+            const bool alreadyCorrect = isAutotileScreen(screenId) && currentKeyForScreen(screenId) == oldKey;
+            if (!alreadyCorrect) {
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, windowId, screenId]() {
+                        revalidateWindowContext(windowId, screenId);
+                    },
+                    Qt::QueuedConnection);
             }
+        } else if (isAutotileScreen(screenId)) {
+            // Genuine cross-screen move to an autotile screen: migrate now.
+            m_windowToStateKey[windowId] = currentKeyForScreen(screenId);
+            migrateWindowBetweenKeys(windowId, oldKey, screenId);
         } else {
-            // Window moved to a non-autotile screen — remove tracking entirely.
-            // Leaving a stale entry pointing at a snap screen causes phantom
-            // lookups and prevents clean re-entry if the window returns.
-            // Drop the per-window caches too: removeWindow()/windowClosed()
-            // clear these on their paths, and a lingering autotile-floated
-            // marker would keep feeding the daemon's mode-flip logic while a
-            // stored min-size would survive a later re-entry stale.
+            // Genuine cross-screen move to a non-autotile screen — remove
+            // tracking entirely. Leaving a stale entry pointing at a snap screen
+            // causes phantom lookups and prevents clean re-entry if the window
+            // returns. Drop the per-window caches too: removeWindow()/
+            // windowClosed() clear these on their paths, and a lingering
+            // autotile-floated marker would keep feeding the daemon's mode-flip
+            // logic while a stored min-size would survive a later re-entry stale.
             m_windowToStateKey.remove(windowId);
             m_windowMinSizes.remove(windowId);
             m_autotileFloatedWindows.remove(windowId);
@@ -2476,7 +2641,13 @@ void AutotileEngine::onWindowAdded(const QString& windowId)
 
     PhosphorTiles::TilingState* state = tilingStateForScreen(screenId);
     const int maxWin = effectiveMaxWindows(screenId);
-    if (state && state->tiledWindowCount() >= maxWin) {
+    // A window matched by a "Float this app" rule must bypass the tiled-window
+    // cap: it opens floating and so consumes no tile slot (tiledWindowCount
+    // excludes floats), and insertWindow marks it floating once inserted. Dropping
+    // it here would leave it untracked — neither floating in autotile (so the
+    // IsFloating match field stays false) nor re-tileable via Meta+F.
+    const bool ruleWillFloat = m_floatPredicate && m_floatPredicate(windowId);
+    if (state && state->tiledWindowCount() >= maxWin && !ruleWillFloat) {
         qCDebug(PhosphorTileEngine::lcTileEngine)
             << "Max window limit reached for screen" << screenId << "(max=" << maxWin << ")";
         // Purge this window from pending initial orders so the order doesn't
@@ -2489,23 +2660,8 @@ void AutotileEngine::onWindowAdded(const QString& windowId)
 
     const bool inserted = insertWindow(windowId, screenId);
 
-    // Sync floating state to daemon. Float state is per-mode:
-    // - Restored as floating from autotile's saved set → notify daemon to set WTS floating
-    // - Inserted as tiled but WTS says floating (stale snap-mode float) → clear WTS floating
-    //
-    // Use windowFloatingStateSynced (not windowFloatingChanged): this is a
-    // passive state-sync on window insertion, not a user float toggle. The
-    // daemon must NOT restore pre-tile geometry here — the window was just
-    // added (e.g. dropped onto an autotile VS from a snap VS) and already
-    // has a valid position. Routing through windowFloatingChanged causes
-    // syncAutotileFloatState to call applyGeometryForFloat, which teleports
-    // the window to a cross-screen-adjusted rect and resizes it.
-    if (inserted && state) {
-        if (state->isFloating(windowId)) {
-            Q_EMIT windowFloatingStateSynced(windowId, true, screenId);
-        } else if (m_windowTracker && m_windowTracker->isWindowFloating(windowId)) {
-            Q_EMIT windowFloatingStateSynced(windowId, false, screenId);
-        }
+    if (inserted) {
+        emitInsertFloatStateSync(windowId, screenId);
     }
 
     if (inserted && m_config && m_config->focusNewWindows) {
@@ -2588,6 +2744,232 @@ void AutotileEngine::onWindowFocused(const QString& windowId)
     state->setFocusedWindow(windowId);
 }
 
+void AutotileEngine::onWindowResized(const QString& rawWindowId, const QRect& oldFrame, const QRect& newFrame,
+                                     const QString& screenId)
+{
+    if (rawWindowId.isEmpty() || !oldFrame.isValid() || !newFrame.isValid()) {
+        return;
+    }
+
+    // Resolve to the canonical instance id that keys m_windowToStateKey, the
+    // TilingState, and the SplitTree. The daemon calls this public boundary with
+    // the raw id (like every other IPlacementEngine override here); without this
+    // a window whose app class was renamed mid-session would pass the adaptor's
+    // canonicalizing screenForTrackedWindow guard but then miss every lookup
+    // below and silently drop the reflow. Lookup-only (no canonical-key mutation)
+    // since a resize is not a window-registration point.
+    const QString windowId = canonicalizeForLookup(rawWindowId);
+
+    // The daemon resolved screenId from the same window→state map, so treat it as
+    // authoritative. Resolve the owning state with a pure lookup: stateForWindow
+    // never creates state, whereas tilingStateForScreen would insert an empty
+    // TilingState for a known-but-stateless screen that then just fails the guards
+    // below. stateForWindow returns the state stored for the window's
+    // TilingStateKey; the ownerScreen != resolvedScreen check below then enforces
+    // that the state's screen agrees with the daemon-supplied one.
+    const QString resolvedScreen = screenId;
+    if (resolvedScreen.isEmpty() || !isAutotileScreen(resolvedScreen)) {
+        return;
+    }
+    QString ownerScreen;
+    PhosphorTiles::TilingState* state = stateForWindow(windowId, &ownerScreen);
+    if (!state || ownerScreen != resolvedScreen) {
+        return;
+    }
+
+    // Floating windows are not part of the tiling — they never reflow neighbours.
+    if (state->isFloating(windowId)) {
+        return;
+    }
+
+    // Need at least two tiled windows for a neighbour to absorb the resize.
+    if (state->tiledWindowCount() < 2) {
+        return;
+    }
+
+    // Cross-output guard: if the resize carried the window's centre off its
+    // screen, this is a monitor handoff — let windowScreenChanged own the
+    // reassignment rather than reflowing a layout the window is leaving. Use the
+    // full screen rect, not the strut-inset work area, so a window whose centre
+    // legitimately lands under a panel is not misread as having left the screen.
+    // ScreenManager::screenGeometry() resolves both physical and virtual
+    // (region-bounded) IDs to their full rect; the engine's available-geometry
+    // helper is only a last resort when the manager has no tracked rect for the id.
+    QRect screen;
+    if (m_screenManager) {
+        screen = m_screenManager->screenGeometry(resolvedScreen);
+    }
+    if (!screen.isValid()) {
+        screen = screenGeometry(resolvedScreen);
+    }
+    if (screen.isValid() && !screen.contains(newFrame.center())) {
+        return;
+    }
+
+    PhosphorTiles::TilingAlgorithm* algo = effectiveAlgorithm(resolvedScreen);
+    if (!algo) {
+        return;
+    }
+
+    // Tier A — tree/memory algorithms reflow gap-free by adjusting the split
+    // ratio of the ancestor split that owns each moved edge. These persist the
+    // adjustment in the SplitTree (serialized with the state), not state.splitRatio,
+    // so they are intentionally outside the m_userTunedSplitRatio mechanism — no
+    // noteSplitRatioUserTuned here.
+    if (algo->supportsMemory()) {
+        if (applyTreeResizeReflow(state, windowId, oldFrame, newFrame, resolvedScreen)) {
+            retileAfterOperation(resolvedScreen, true);
+        }
+        return;
+    }
+
+    // Tier B — a non-tree algorithm that opts into the resize hook records the
+    // adjustment (typically into TilingState::scriptState) before we retile; the
+    // follow-up retile then lays the windows out honouring it. Algorithms without
+    // the hook have no reflow model and leave the user's manual geometry as-is.
+    if (algo->supportsResizeHook()) {
+        const int threshold = PhosphorTiles::AutotileDefaults::ResizeEdgeMoveThresholdPx;
+        const bool leftMoved = std::abs(newFrame.x() - oldFrame.x()) > threshold;
+        const bool rightMoved =
+            std::abs((newFrame.x() + newFrame.width()) - (oldFrame.x() + oldFrame.width())) > threshold;
+        const bool topMoved = std::abs(newFrame.y() - oldFrame.y()) > threshold;
+        const bool bottomMoved =
+            std::abs((newFrame.y() + newFrame.height()) - (oldFrame.y() + oldFrame.height())) > threshold;
+        PhosphorTiles::ResizeEvent ev;
+        ev.index = state->tiledWindows().indexOf(windowId);
+        // Defensive backstop: the window cleared the floating and tracked guards
+        // above, so under both current overflow modes it is present in
+        // tiledWindows() (Float floats over-cap windows — they return at the
+        // floating guard — and Unlimited has no cap), meaning indexOf normally
+        // succeeds. Guard the result anyway so a future overflow mode that keeps
+        // a non-floating window out of the tiled list can never hand a -1 index
+        // to the script hook.
+        if (ev.index < 0) {
+            return;
+        }
+        ev.oldRect = oldFrame;
+        ev.newRect = newFrame;
+        // Report at most one edge per axis. When both edges of an axis moved
+        // together that axis translated (a move, not a resize), so neither edge
+        // is reported — mirroring applyTreeResizeReflow and the per-axis
+        // mutual-exclusion the ResizeEvent contract guarantees to scripts.
+        ev.left = leftMoved && !rightMoved;
+        ev.right = rightMoved && !leftMoved;
+        ev.top = topMoved && !bottomMoved;
+        ev.bottom = bottomMoved && !topMoved;
+        if (ev.left || ev.right || ev.top || ev.bottom) {
+            // The hook may apply a new split ratio to the state (ratio-based
+            // algorithms reflow this way). If it did, mark the state user-tuned so
+            // the change stays local to this screen+desktop and survives a settings
+            // refresh — exactly like an interactive master-ratio keystroke.
+            const qreal ratioBefore = state->splitRatio();
+            algo->onWindowResized(state, ev);
+            if (!qFuzzyCompare(1.0 + state->splitRatio(), 1.0 + ratioBefore)) {
+                noteSplitRatioUserTuned(resolvedScreen);
+            }
+            retileAfterOperation(resolvedScreen, true);
+        }
+    }
+}
+
+bool AutotileEngine::applyTreeResizeReflow(PhosphorTiles::TilingState* state, const QString& windowId,
+                                           const QRect& oldFrame, const QRect& newFrame, const QString& screenId)
+{
+    using Edge = PhosphorTiles::SplitTree::Edge;
+
+    PhosphorTiles::SplitTree* tree = state->splitTree();
+    if (!tree || tree->leafCount() < 2 || !tree->leafForWindow(windowId)) {
+        return false;
+    }
+
+    const QStringList tiled = state->tiledWindows();
+    const QVector<QRect> zones = state->calculatedZones();
+    // The reflow reads split extents from the rendered zones, so they must be in
+    // lockstep with the tiled-window list. The divergence is transient: while a
+    // capped layout (recalculateLayout sizes calculatedZones to
+    // min(tiledCount, maxWindows)) is being applied, applyTiling has not yet
+    // floated the over-cap windows out of tiledWindows(), so the lists briefly
+    // differ in length. In steady state they match again under both overflow
+    // modes (Float floats over-cap windows out of tiledWindows(); Unlimited
+    // never caps). Bail rather than read a stale/short vector — resizing during
+    // that transient is a no-op, which is fine.
+    if (zones.isEmpty() || zones.size() != tiled.size()) {
+        return false;
+    }
+
+    const int innerGap = effectiveInnerGap(screenId);
+    const int threshold = PhosphorTiles::AutotileDefaults::ResizeEdgeMoveThresholdPx;
+
+    // Identify which edge(s) moved. A resize moves at most one edge per axis; a
+    // corner moves one on each axis. If both edges of an axis shifted together
+    // that axis describes a translation (move), not a resize — skip it.
+    struct EdgeMove
+    {
+        Edge edge;
+        int newPos;
+    };
+    QVarLengthArray<EdgeMove, 2> moves;
+    const int oldL = oldFrame.x();
+    const int newL = newFrame.x();
+    const int oldR = oldFrame.x() + oldFrame.width();
+    const int newR = newFrame.x() + newFrame.width();
+    const int oldT = oldFrame.y();
+    const int newT = newFrame.y();
+    const int oldB = oldFrame.y() + oldFrame.height();
+    const int newB = newFrame.y() + newFrame.height();
+    const bool leftMoved = std::abs(newL - oldL) > threshold;
+    const bool rightMoved = std::abs(newR - oldR) > threshold;
+    const bool topMoved = std::abs(newT - oldT) > threshold;
+    const bool bottomMoved = std::abs(newB - oldB) > threshold;
+    if (leftMoved != rightMoved) {
+        moves.push_back(rightMoved ? EdgeMove{Edge::Right, newR} : EdgeMove{Edge::Left, newL});
+    }
+    if (topMoved != bottomMoved) {
+        moves.push_back(bottomMoved ? EdgeMove{Edge::Bottom, newB} : EdgeMove{Edge::Top, newT});
+    }
+    if (moves.isEmpty()) {
+        return false;
+    }
+
+    for (const EdgeMove& move : moves) {
+        PhosphorTiles::SplitNode* split = tree->splitOwningEdge(windowId, move.edge);
+        if (!split) {
+            continue; // edge coincides with a screen boundary — nothing to resize
+        }
+
+        const QRect splitRect = subtreeBoundingRect(split, tiled, zones);
+        if (!splitRect.isValid()) {
+            continue;
+        }
+
+        const bool alongY = (move.edge == Edge::Top || move.edge == Edge::Bottom);
+        const int axisStart = alongY ? splitRect.y() : splitRect.x();
+        const int content = (alongY ? splitRect.height() : splitRect.width()) - innerGap;
+        if (content <= 0) {
+            continue;
+        }
+
+        // firstSize is the first child's extent up to the moved boundary. A
+        // Right/Bottom edge belongs to a first-child window and sits on the
+        // split line (firstSize = pos - start). A Left/Top edge belongs to a
+        // second-child window and sits one gap past it (firstSize = pos - start - gap).
+        const bool secondSide = (move.edge == Edge::Left || move.edge == Edge::Top);
+        const int firstSize = secondSide ? (move.newPos - axisStart - innerGap) : (move.newPos - axisStart);
+        const qreal ratio = static_cast<qreal>(firstSize) / static_cast<qreal>(content);
+
+        tree->resizeSplitNode(split, ratio); // clamps to [MinSplitRatio, MaxSplitRatio]
+    }
+
+    // At least one edge moved past the threshold (moves is non-empty, checked
+    // above), so the compositor has already committed an out-of-tile geometry
+    // for the dragged window. Always retile to re-snap it onto its zone — even
+    // when no split ratio actually changed because the edge was a screen
+    // boundary or was already pinned at Min/MaxSplitRatio. Without this the
+    // window would be stranded at its dragged size until the next incidental
+    // retile.
+    return true;
+}
+
 void AutotileEngine::onScreenGeometryChanged(const QString& screenId)
 {
     if (!isAutotileScreen(screenId) || !m_screenStates.contains(currentKeyForScreen(screenId))) {
@@ -2621,6 +3003,33 @@ void AutotileEngine::onLayoutChanged(PhosphorZones::Layout* layout)
 // ═══════════════════════════════════════════════════════════════════════════════
 // Internal implementation
 // ═══════════════════════════════════════════════════════════════════════════════
+
+void AutotileEngine::emitInsertFloatStateSync(const QString& windowId, const QString& screenId)
+{
+    // Read-only lookup — must NOT lazily materialize a state. tilingStateForScreen
+    // would create one for a known-but-stateless screen; this method only reads
+    // isFloating right after a successful insertWindow, so the state already exists.
+    PhosphorTiles::TilingState* state = m_screenStates.value(currentKeyForScreen(screenId));
+    if (!state) {
+        return;
+    }
+    // Sync floating state to daemon. Float state is per-mode:
+    // - Restored as floating from autotile's saved set → notify daemon to set WTS floating
+    // - Inserted as tiled but WTS says floating (stale snap-mode float) → clear WTS floating
+    //
+    // Use windowFloatingStateSynced (not windowFloatingChanged): this is a
+    // passive state-sync on window insertion, not a user float toggle. The
+    // daemon must NOT restore pre-tile geometry here — the window was just
+    // added (e.g. dropped onto an autotile VS from a snap VS) and already
+    // has a valid position. Routing through windowFloatingChanged causes
+    // syncAutotileFloatState to call applyGeometryForFloat, which teleports
+    // the window to a cross-screen-adjusted rect and resizes it.
+    if (state->isFloating(windowId)) {
+        Q_EMIT windowFloatingStateSynced(windowId, true, screenId);
+    } else if (m_windowTracker && m_windowTracker->isWindowFloating(windowId)) {
+        Q_EMIT windowFloatingStateSynced(windowId, false, screenId);
+    }
+}
 
 bool AutotileEngine::insertWindow(const QString& windowId, const QString& screenId)
 {
@@ -2813,18 +3222,7 @@ bool AutotileEngine::insertWindow(const QString& windowId, const QString& screen
 
     if (!inserted) {
         // Insert based on config preference
-        switch (m_config->insertPosition) {
-        case AutotileConfig::InsertPosition::End:
-            state->addWindow(windowId);
-            break;
-        case AutotileConfig::InsertPosition::AfterFocused:
-            state->insertAfterFocused(windowId);
-            break;
-        case AutotileConfig::InsertPosition::AsMaster:
-            state->addWindow(windowId);
-            state->moveToFront(windowId);
-            break;
-        }
+        insertWindowByConfigOrder(state, windowId);
     }
 
     // Float restore is handled entirely by the record take() above (a floating
@@ -2832,8 +3230,34 @@ bool AutotileEngine::insertWindow(const QString& windowId, const QString& screen
     // parallel saved-floating set — the WindowPlacement record is the single
     // source of truth for cross-mode float state.
 
+    // A matched "Float this app" window rule opens the window floating: it is
+    // inserted above (so it stays managed and Meta+F can re-tile it), then marked
+    // floating here, identical to a manual float toggle. Guarded on not-already-
+    // floating so the placement-record float-restore branch above is not
+    // re-applied. onWindowAdded then emits windowFloatingStateSynced so the daemon
+    // mirrors the state.
+    if (m_floatPredicate && !state->isFloating(windowId) && m_floatPredicate(windowId)) {
+        state->setFloating(windowId, true);
+    }
+
     m_windowToStateKey.insert(windowId, currentKey);
     return true;
+}
+
+void AutotileEngine::insertWindowByConfigOrder(PhosphorTiles::TilingState* state, const QString& windowId)
+{
+    switch (m_config->insertPosition) {
+    case AutotileConfig::InsertPosition::End:
+        state->addWindow(windowId);
+        break;
+    case AutotileConfig::InsertPosition::AfterFocused:
+        state->insertAfterFocused(windowId);
+        break;
+    case AutotileConfig::InsertPosition::AsMaster:
+        state->addWindow(windowId);
+        state->moveToFront(windowId);
+        break;
+    }
 }
 
 void AutotileEngine::removeWindow(const QString& windowId)
@@ -3008,6 +3432,10 @@ bool AutotileEngine::recalculateLayout(const QString& screenId)
     tilingParams.focusedIndex = focusedIndex;
     tilingParams.screenInfo = screenInfo;
     tilingParams.customParams = customParams;
+    // Previous applied zones, exposed to scripts as ctx.currentGeometries.
+    // Captured before the algorithm runs (state->calculatedZones() is not
+    // overwritten until setCalculatedZones below), so it is the prior layout.
+    tilingParams.currentGeometries = state->calculatedZones();
     QVector<QRect> zones = algo->calculateZones(tilingParams);
 
     qCInfo(PhosphorTileEngine::lcTileEngine)
@@ -3593,16 +4021,25 @@ QRect AutotileEngine::screenGeometry(const QString& screenId) const
         return m_screenManager->screenAvailableGeometry(screenId);
     }
 
-    // Physical screens: existing behavior
+    // Physical screens: resolve through the manager's cache-backed string
+    // overload, which reads the tracked-screen snapshot (from the screen
+    // provider) rather than a live QScreen. This is behaviourally identical to
+    // the old findByIdOrName + actualAvailableGeometry(QScreen*) path on a real
+    // system (both feed the same available-geometry/strut cache) AND resolves
+    // synthetic, QScreen-less screens from a test provider — without it,
+    // directional cross-output navigation cannot be exercised headlessly.
+    const QRect geom = m_screenManager->screenAvailableGeometry(screenId);
+    if (geom.isValid()) {
+        return geom;
+    }
+
+    // Last resort: a live QScreen the manager has not tracked yet (a hotplug
+    // race). The QScreen* overload resolves the connector and falls back to
+    // QScreen::availableGeometry().
     QScreen* screen = PhosphorScreens::ScreenIdentity::findByIdOrName(screenId);
     if (!screen) {
         return QRect();
     }
-
-    // m_screenManager is non-null here — the !m_screenManager early-return
-    // at the top of this function already handled that case. The QScreen*
-    // overload resolves the connector and falls back to
-    // QScreen::availableGeometry() when it is not tracked.
     return m_screenManager->actualAvailableGeometry(screen);
 }
 
@@ -3614,6 +4051,14 @@ bool AutotileEngine::isKnownScreen(const QString& screenId) const
     }
     if (PhosphorIdentity::VirtualScreenId::isVirtual(screenId)) {
         return m_screenManager->screenGeometry(screenId).isValid();
+    }
+    // Physical screens: resolve via the manager's tracked-screen snapshot
+    // (the screen provider), which is equivalent to a live-QScreen lookup on a
+    // real system but also recognises synthetic, QScreen-less screens from a
+    // test provider — keeping this consistent with screenGeometry() above.
+    // Fall back to findByIdOrName for a not-yet-tracked hotplug race.
+    if (m_screenManager->screenGeometry(screenId).isValid()) {
+        return true;
     }
     return PhosphorScreens::ScreenIdentity::findByIdOrName(screenId) != nullptr;
 }
@@ -3632,11 +4077,16 @@ void AutotileEngine::propagateGlobalSplitRatio()
 {
     // Only propagate to current desktop/activity states — per-desktop split
     // ratio adjustments (via increaseMasterRatio) are preserved on other desktops.
+    // States the user explicitly tuned (m_userTunedSplitRatio) and screens with a
+    // per-screen override are skipped, so a local ratio tweak is never clobbered
+    // by a settings refresh.
     for (auto it = m_screenStates.constBegin(); it != m_screenStates.constEnd(); ++it) {
-        if (it.key().desktop != m_currentDesktop || it.key().activity != m_currentActivity) {
+        if (it.key().desktop != currentKeyForScreen(it.key().screenId).desktop
+            || it.key().activity != m_currentActivity) {
             continue;
         }
-        if (it.value() && !hasPerScreenOverride(it.key().screenId, PerScreenKeys::SplitRatio)) {
+        if (it.value() && !hasPerScreenOverride(it.key().screenId, PerScreenKeys::SplitRatio)
+            && !m_userTunedSplitRatio.contains(it.key())) {
             it.value()->setSplitRatio(m_config->splitRatio);
         }
     }
@@ -3645,12 +4095,16 @@ void AutotileEngine::propagateGlobalSplitRatio()
 void AutotileEngine::propagateGlobalMasterCount()
 {
     // Only propagate to current desktop/activity states — per-desktop master
-    // count adjustments are preserved on other desktops.
+    // count adjustments are preserved on other desktops. States the user
+    // explicitly tuned (m_userTunedMasterCount) and per-screen-override screens
+    // are skipped, so a local master-count tweak is never clobbered by a refresh.
     for (auto it = m_screenStates.constBegin(); it != m_screenStates.constEnd(); ++it) {
-        if (it.key().desktop != m_currentDesktop || it.key().activity != m_currentActivity) {
+        if (it.key().desktop != currentKeyForScreen(it.key().screenId).desktop
+            || it.key().activity != m_currentActivity) {
             continue;
         }
-        if (it.value() && !hasPerScreenOverride(it.key().screenId, PerScreenKeys::MasterCount)) {
+        if (it.value() && !hasPerScreenOverride(it.key().screenId, PerScreenKeys::MasterCount)
+            && !m_userTunedMasterCount.contains(it.key())) {
             it.value()->setMasterCount(m_config->masterCount);
         }
     }
@@ -3690,14 +4144,25 @@ void AutotileEngine::backfillWindows()
         // (insertWindow calls m_windowToStateKey.insert which is unsafe during const iteration)
         QStringList candidates;
         for (auto it = m_windowToStateKey.constBegin(); it != m_windowToStateKey.constEnd(); ++it) {
-            if (it.value().screenId == screenId && it.value().desktop == m_currentDesktop
+            if (it.value().screenId == screenId
+                && it.value().desktop == currentKeyForScreen(it.value().screenId).desktop
                 && it.value().activity == m_currentActivity && !state->containsWindow(it.key())
                 && shouldTileWindow(it.key())) {
                 candidates.append(it.key());
             }
         }
         for (const QString& windowId : candidates) {
-            insertWindow(windowId, screenId);
+            const bool inserted = insertWindow(windowId, screenId);
+            // Same passive float-state sync onWindowAdded does: a window that
+            // insertWindow floats here (matched Float rule / restored saved float)
+            // — or whose stale WTS float must be cleared because it was placed
+            // tiled — would otherwise desync from the daemon until its next add.
+            // emitInsertFloatStateSync uses windowFloatingStateSynced (NOT
+            // windowFloatingChanged), so it applies no geometry and cannot drive
+            // the mid-transition feedback loop the overflow-recovery note warns of.
+            if (inserted) {
+                emitInsertFloatStateSync(windowId, screenId);
+            }
             if (state->tiledWindowCount() >= maxWin) {
                 break;
             }
@@ -3784,6 +4249,14 @@ void AutotileEngine::retileAfterOperation(const QString& screenId, bool operatio
     if (!isAutotileScreen(screenId)) {
         return;
     }
+
+    // This synchronous retile recomputes from the current state, so any deferred
+    // retile already queued for the SAME screen is now redundant. Drop it —
+    // otherwise processPendingRetiles fires a second batch for this screen
+    // microseconds later, and that duplicate supersedes the staggered apply of
+    // this one, stranding every window past the first (a cross-output move left
+    // the source monitor with windows that never reflowed).
+    m_pendingRetileScreens.remove(screenId);
 
     // When already inside retile(), still recalc and apply for this screen so
     // navigation (rotate, swap, etc.) is never dropped — user expects geometry
@@ -4015,6 +4488,16 @@ void AutotileEngine::moveFocusedInDirection(const QString& direction, const Navi
 void AutotileEngine::swapFocusedInDirection(const QString& direction, const NavigationContext& ctx)
 {
     m_navigation->swapFocusedInDirection(direction, QStringLiteral("swap"), canonicalizeForLookup(ctx.windowId));
+}
+
+QString AutotileEngine::entryWindowForCrossing(const QString& screenId, const QString& direction) const
+{
+    return m_navigation->entryWindowOnScreen(screenId, direction);
+}
+
+int AutotileEngine::windowOrderIndexForWindow(const QString& screenId, const QString& windowId) const
+{
+    return m_navigation->windowOrderIndexOnScreen(screenId, canonicalizeForLookup(windowId));
 }
 
 void AutotileEngine::moveFocusedToPosition(int position, const NavigationContext& ctx)

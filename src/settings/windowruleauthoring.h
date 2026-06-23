@@ -16,7 +16,7 @@ namespace PlasmaZones::WindowRuleAuthoring {
 /// table.
 QVariantList matchFields();
 
-/// Operators valid for @p fieldValue (a `PhosphorWindowRule::Field` enum int).
+/// Operators valid for @p fieldValue (a `PhosphorWindowRules::Field` enum int).
 /// Each entry: `{ value: int (Operator enum), wire: QString, label }`.
 QVariantList operatorsForField(int fieldValue);
 
@@ -26,6 +26,13 @@ QVariantList operatorsForField(int fieldValue);
 /// condition rows and doesn't resize when the field — and thus its valid
 /// operator subset — changes.
 QVariantList allOperators();
+
+/// Optional translated input hint for a match condition's value editor, keyed on
+/// the operator wire token @p op (the leaf's `node.op`). Non-empty only for
+/// operators whose value editor is a free-text box and whose syntax / matching
+/// semantics aren't obvious (regex, app-id match); empty otherwise. The
+/// match-side counterpart to the action-param hints.
+QString matchValueHint(const QString& op);
 
 /// Registered action types for the action-editor dropdown. Each entry:
 /// `{ value: QString (action type id), label, params: [ ... ],

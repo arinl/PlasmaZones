@@ -8,13 +8,14 @@
 #include "../modetracker.h"
 #include "../unifiedlayoutcontroller.h"
 #include "../shortcutmanager.h"
-#include <PhosphorWindowRule/ExclusionRules.h>
+#include <PhosphorWindowRules/ExclusionRules.h>
 #include <PhosphorZones/LayoutRegistry.h>
 #include <PhosphorScreens/Manager.h>
 #include <PhosphorWorkspaces/VirtualDesktopManager.h>
 #include <PhosphorWorkspaces/ActivityManager.h>
 #include "../../core/logging.h"
 #include "../../core/constants.h"
+#include "../../core/screenmoderouter.h"
 #include "../../core/utils.h"
 #include <PhosphorPlacement/WindowTrackingService.h>
 #include "../../dbus/layoutadaptor.h"
@@ -63,7 +64,7 @@ void Daemon::initializeAutotile()
                     // change is irrelevant in that case.
                     if (m_running && m_modeTracker && m_modeTracker->isAnyScreenAutotile() && m_settings
                         && m_settings->showOsdOnLayoutSwitch() && m_overlayService) {
-                        auto* algo = m_algorithmRegistry->algorithm(algorithmId);
+                        auto* algo = m_algorithmRegistry ? m_algorithmRegistry->algorithm(algorithmId) : nullptr;
                         QString displayName = algo ? algo->name() : algorithmId;
                         QString screenId;
                         if (m_autotileEngine) {
@@ -117,7 +118,7 @@ void Daemon::initializeAutotile()
                             // screen (e.g., dragged from autotile VS to snap VS and resnapped)
                             // is no longer on the releasing screen — its state on the current
                             // screen must not be disturbed.
-                            const QString windowScreen = wts->screenAssignments().value(windowId);
+                            const QString windowScreen = wts->screenForWindow(windowId);
                             if (!windowScreen.isEmpty() && !releasedScreenIds.contains(windowScreen)) {
                                 // Window is on a different screen — do NOT touch its state.
                                 // It may be on another autotile screen (flag still valid) or
@@ -158,7 +159,7 @@ void Daemon::initializeAutotile()
                             if (snapFloat) {
                                 qCInfo(lcDaemon) << "windowsReleased: restoring snap-float for" << windowId;
                                 m_windowTrackingAdaptor->setWindowFloating(windowId, true);
-                                const QString screen = wts->screenAssignments().value(windowId);
+                                const QString screen = wts->screenForWindow(windowId);
                                 QRect g = rec->freeGeometryFor(screen.isEmpty() ? rec->screenId : screen);
                                 if (!g.isValid()) {
                                     g = rec->anyFreeGeometry();
@@ -171,7 +172,7 @@ void Daemon::initializeAutotile()
                                     m_pendingSnapFloatRestores.append(entry);
                                 }
                             } else if (snapSnapped) {
-                                const QString screen = wts->screenAssignments().value(windowId);
+                                const QString screen = wts->screenForWindow(windowId);
                                 const QString restoreScreen = screen.isEmpty() ? rec->screenId : screen;
                                 const QRect geo = wts->resolveZoneGeometry(snapSlot.zoneIds, restoreScreen);
                                 if (geo.isValid()) {
@@ -223,7 +224,7 @@ void Daemon::initializeAutotile()
                 qCWarning(lcDaemon) << "Mode toggle: empty screenId from resolveCursorScreenId";
                 return;
             }
-            int desktop = currentDesktop();
+            int desktop = currentDesktopForScreen(screenId);
             QString activity = currentActivity();
             qCInfo(lcDaemon) << "Mode toggle: screenId=" << screenId << "desktop=" << desktop
                              << "activity=" << activity;
@@ -330,20 +331,48 @@ void Daemon::initializeAutotile()
 
                 // Resolve algorithm from the AssignmentEntry's tilingAlgorithm
                 // (preserved even when mode is Snapping), then fall back to broader
-                // scopes, then to the user's configured default (settings).
+                // scopes. This is the EXPLICITLY-assigned algorithm for the context.
                 QString algoId = m_layoutManager->tilingAlgorithmForScreen(screenId, desktop, activity);
                 if (algoId.isEmpty() && !activity.isEmpty()) {
                     algoId = m_layoutManager->tilingAlgorithmForScreen(screenId, desktop, QString());
                 }
-                if (algoId.isEmpty() && m_settings) {
-                    algoId = m_settings->defaultAutotileAlgorithm();
-                }
-                if (algoId.isEmpty()) {
-                    algoId = PhosphorTiles::AlgorithmRegistry::staticDefaultAlgorithmId();
+                // No explicitly-assigned algorithm: fall back to the user's
+                // configured default — UNLESS the default is suppressed for this
+                // context. Under suppress, switching to autotile applies a bare
+                // "autotile:" assignment (mode set, no algorithm) so the context
+                // selects autotile mode but does NOT tile with the global default;
+                // updateAutotileScreens skips a suppressed bare context until the
+                // user assigns a concrete algorithm.
+                if (algoId.isEmpty()
+                    && !m_layoutManager->isDefaultAssignmentSuppressedForContext(screenId, desktop, activity)) {
+                    if (m_settings) {
+                        algoId = m_settings->defaultAutotileAlgorithm();
+                    }
+                    if (algoId.isEmpty()) {
+                        algoId = PhosphorTiles::AlgorithmRegistry::staticDefaultAlgorithmId();
+                    }
                 }
                 if (!algoId.isEmpty()) {
                     applied =
                         m_unifiedLayoutController->applyLayoutById(PhosphorLayout::LayoutId::makeAutotileId(algoId));
+                } else {
+                    // Suppressed with no explicitly-assigned algorithm: switch the
+                    // context to autotile mode WITHOUT an algorithm so it selects the
+                    // mode but does not tile. applyLayoutById can't apply a bare
+                    // "autotile:" (it has no matching layout preview and returns
+                    // false), so write the entry directly. The emitted layoutAssigned
+                    // drives the daemon's updateAutotileScreens (which skips this bare
+                    // suppressed context, so it does not tile) AND updateLayoutFilter,
+                    // so the mode filter refreshes off that signal — no explicit call
+                    // needed here.
+                    PhosphorZones::AssignmentEntry entry;
+                    entry.mode = PhosphorZones::AssignmentEntry::Autotile;
+                    m_layoutManager->setAssignmentEntryDirect(screenId, desktop, activity, entry);
+                    // No layoutApplied/autotileApplied signal fires for a direct
+                    // entry write, so surface the feedback OSD here: the mode
+                    // switched to autotile but nothing is assigned to tile with.
+                    showNotAssignedOsd(screenId);
+                    applied = true;
                 }
             }
 
@@ -436,8 +465,19 @@ void Daemon::initializeAutotile()
                         windowOrder.append(windowId);
                     }
 
-                    QVector<ZoneAssignmentEntry> entries = concreteSnap->calculateResnapEntriesFromAutotileOrder(
-                        windowOrder, resnapScreenId, preClaimedZoneIds);
+                    // Use the raw, no-fallback calculation — NOT
+                    // calculateResnapEntriesFromAutotileOrder, whose "empty order ⇒
+                    // resnap from current assignments" fallback is the global-keyed
+                    // current-assignment resnap the comment above forbids here. When
+                    // windowOrder is empty (every window was never snapped, so the
+                    // filter above dropped them all), that fallback returns the
+                    // windows' stale current zone assignments — their tiled geometry —
+                    // which both re-pins them to the tile positions AND marks them as
+                    // resnapped, suppressing the intended pre-tile float-back in
+                    // buildAutotileRestoreEntries. The raw call returns nothing for an
+                    // empty order, letting those windows correctly float back.
+                    QVector<ZoneAssignmentEntry> entries =
+                        concreteSnap->calculateResnapFromAutotileOrder(windowOrder, resnapScreenId, preClaimedZoneIds);
                     // Derive the exclusion set from the entries actually produced —
                     // not a min(windows, zoneCount) guess. With zones pre-claimed by
                     // branch-b restores, fewer windows get a zone; a window that got
@@ -571,7 +611,7 @@ void Daemon::connectLayoutSignals()
                 updateLayoutFilter();
 
                 // Sync unified controller cycling index when assignment affects current desktop.
-                const int curDesktop = currentDesktop();
+                const int curDesktop = currentDesktopForScreen(screenId);
                 if (virtualDesktop != 0 && virtualDesktop != curDesktop) {
                     return;
                 }
@@ -702,7 +742,7 @@ void Daemon::connectOverlaySignals()
             // autotile, notify the engine so it removes the window from the source
             // screen's tiling tree and retiles the remaining windows.
             if (m_autotileEngine && m_windowTrackingAdaptor && m_windowTrackingAdaptor->service()) {
-                const QString sourceScreen = m_windowTrackingAdaptor->service()->screenAssignments().value(windowId);
+                const QString sourceScreen = m_windowTrackingAdaptor->service()->screenForWindow(windowId);
                 if (!sourceScreen.isEmpty() && sourceScreen != effectiveScreenId && isAutotileScreen(sourceScreen)) {
                     m_autotileEngine->windowClosed(windowId);
                     // Clear autotile-floated marker immediately — windowClosed removes
@@ -792,10 +832,10 @@ void Daemon::finalizeStartup()
     // synchronously before the rulesChanged subscription wires) already pruned what
     // was loaded then; this re-run covers records that landed during the later
     // autotile load. Patterns derive from the unified WindowRule store via
-    // PhosphorWindowRule::ExclusionRules; the WTA prune removeIf's the placement store.
+    // PhosphorWindowRules::ExclusionRules; the WTA prune removeIf's the placement store.
     if (m_windowTrackingAdaptor) {
         m_windowTrackingAdaptor->pruneExcludedPendingRestores(
-            PhosphorWindowRule::ExclusionRules::applicationExcludePatternsFrom(m_excludeRuleSet));
+            PhosphorWindowRules::ExclusionRules::applicationExcludePatternsFrom(m_excludeRuleSet));
     }
 
     // Signal that daemon is fully initialized and ready for queries
@@ -840,7 +880,7 @@ void Daemon::finalizeStartup()
         // KActivities is unavailable on this system (no point waiting).
         const bool activityReady = !activity.isEmpty() || !PhosphorWorkspaces::ActivityManager::isAvailable();
         if (activityReady) {
-            showOsdForAllScreens(currentDesktop(), activity);
+            showOsdForAllScreens(activity);
         } else if (m_activityManager) {
             // Defer the welcome OSD until the activity arrives from
             // KActivities, otherwise the cascade walks with empty
@@ -871,7 +911,7 @@ void Daemon::finalizeStartup()
                                 }
                                 *fired = true;
                                 QObject::disconnect(*conn);
-                                showOsdForAllScreens(currentDesktop(), a);
+                                showOsdForAllScreens(a);
                             });
             QTimer::singleShot(5000, this, [this, conn, fired]() {
                 if (*fired) {
@@ -892,7 +932,7 @@ void Daemon::finalizeStartup()
                 if (activity.isEmpty() && PhosphorWorkspaces::ActivityManager::isAvailable()) {
                     return;
                 }
-                showOsdForAllScreens(currentDesktop(), activity);
+                showOsdForAllScreens(activity);
             });
         }
     }

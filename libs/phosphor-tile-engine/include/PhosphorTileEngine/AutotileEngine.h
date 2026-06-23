@@ -281,6 +281,28 @@ public:
     void setCurrentDesktop(int desktop) override;
 
     /**
+     * @brief Set a single screen's current virtual desktop (Plasma 6.7 per-output
+     *        virtual desktops, #648)
+     *
+     * Pure context swap: records the screen's desktop in m_screenCurrentDesktop so
+     * currentKeyForScreen() resolves that screen's per-(screen, desktop) state. Does
+     * NOT migrate windows between states — the other desktop's state stays put so it
+     * reappears when the screen returns. Like setCurrentDesktop(), call BEFORE
+     * updateAutotileScreens() so the new key resolves.
+     */
+    void setCurrentDesktopForScreen(const QString& screenId, int desktop) override;
+
+    /// Drop a screen's per-output desktop, reverting it to the global m_currentDesktop.
+    void clearCurrentDesktopForScreen(const QString& screenId) override;
+
+    /// Inject the cross-surface resolver (neighbouring output / desktop lookup)
+    /// used by directional navigation when it reaches a layout boundary.
+    void setCrossSurfaceResolver(PhosphorEngine::ICrossSurfaceResolver* resolver) override
+    {
+        m_crossSurfaceResolver = resolver;
+    }
+
+    /**
      * @brief Set the current activity for per-activity tiling state
      *
      * Swaps the active PhosphorTiles::TilingState set without releasing windows. Must be
@@ -449,6 +471,21 @@ public:
         m_restorePositionPredicate = std::move(predicate);
     }
 
+    /**
+     * Predicate deciding whether an opening window should start FLOATING because a
+     * "Float this app" window rule matched it. Daemon-injected, keyed by the live
+     * windowId. The window is still inserted (so it stays managed and Meta+F can
+     * re-tile it); it is just marked floating, identical to a manual float. When
+     * UNSET (default) no window is rule-floated. Clear with `{}` before destroying
+     * any state the closure captured.
+     */
+    using FloatPredicate = std::function<bool(const QString& windowId)>;
+
+    void setFloatPredicate(FloatPredicate predicate)
+    {
+        m_floatPredicate = std::move(predicate);
+    }
+
     // Cross-engine handoff (see PhosphorEngine/IPlacementEngine.h for contract)
     QString engineId() const override
     {
@@ -462,6 +499,27 @@ public:
         return it == m_windowToStateKey.constEnd() ? QString() : it.value().screenId;
     }
 
+    /**
+     * @brief Reflow neighbors after a window was interactively resized.
+     *
+     * Entry point for the "drag an edge, neighbors fill the gap" behaviour
+     * (GitHub #652). Called by the daemon's WindowTracking adaptor when the
+     * compositor reports an interactive resize of a tiled window has finished.
+     *
+     * For tree/memory algorithms the moved edge(s) are mapped to the owning
+     * @ref PhosphorTiles::SplitTree split(s), whose ratio is adjusted so the
+     * neighbour subtree absorbs the change, then the screen is retiled
+     * gap-free. Floating windows, single-window screens, cross-output drags,
+     * and algorithms without a reflow model are no-ops.
+     *
+     * @param rawWindowId The interactively-resized window (raw instance id;
+     *                    canonicalized internally to match the state/tree keys)
+     * @param oldFrame The window's frame geometry before the resize (drag baseline)
+     * @param newFrame The window's frame geometry after the resize
+     * @param screenId Screen the daemon resolved the window to (authoritative)
+     */
+    void onWindowResized(const QString& rawWindowId, const QRect& oldFrame, const QRect& newFrame,
+                         const QString& screenId) override;
     // ═══════════════════════════════════════════════════════════════════════════
     // Settings synchronization
     // ═══════════════════════════════════════════════════════════════════════════
@@ -476,6 +534,14 @@ public:
     QVariantMap perScreenOverrides(const QString& screenId) const override;
     bool hasPerScreenOverride(const QString& screenId, const QString& key) const;
     void updatePerScreenOverride(const QString& screenId, const QString& key, const QVariant& value);
+
+    // Mark the active (screen, desktop, activity) state's split ratio / master
+    // count as user-tuned so propagateGlobalSplitRatio/MasterCount leaves it
+    // alone — the adjustment stays local to that desktop instead of bleeding into
+    // the global config. Called by NavigationController after a shortcut/resize
+    // adjustment in the no-per-screen-override case.
+    void noteSplitRatioUserTuned(const QString& screenId);
+    void noteMasterCountUserTuned(const QString& screenId);
 
     // Effective per-screen values — forwarded to PerScreenConfigResolver
     int effectiveInnerGap(const QString& screenId) const;
@@ -727,6 +793,17 @@ public:
     void swapFocusedInDirection(const QString& direction, const PhosphorEngine::NavigationContext& ctx) override;
     void moveFocusedToPosition(int position, const PhosphorEngine::NavigationContext& ctx) override;
     void rotateWindows(bool clockwise, const PhosphorEngine::NavigationContext& ctx) override;
+
+    /// Cross-mode swap support (queried by the daemon when THIS engine is the
+    /// target): the tiled window at @p screenId's entry edge facing the source
+    /// for a crossing arriving in @p direction — the swap partner. Empty when
+    /// the screen has no tiled windows.
+    QString entryWindowForCrossing(const QString& screenId, const QString& direction) const;
+    /// The RAW window-order index of @p windowId on @p screenId (current desktop;
+    /// counts floats, matching TilingState::addWindow), or -1 when not present —
+    /// lets the daemon land a swap counterpart in the same slot the departing
+    /// window held when re-inserted via HandoffContext.insertIndex.
+    int windowOrderIndexForWindow(const QString& screenId, const QString& windowId) const;
     void reapplyLayout(const PhosphorEngine::NavigationContext& ctx) override;
     void reapplyManagedWindowAppearance() override;
     std::optional<PhosphorEngine::WindowPlacement> capturePlacement(const QString& windowId) const override;
@@ -1032,6 +1109,15 @@ private Q_SLOTS:
 private:
     void connectSignals();
     bool insertWindow(const QString& windowId, const QString& screenId);
+    // Passive float-state sync after insertWindow() places a window: notify the
+    // daemon it opened floating (matched Float rule / restored saved float), or
+    // clear a stale WTS float when it was placed tiled. Shared by onWindowAdded
+    // and backfillWindows so the two cannot diverge.
+    void emitInsertFloatStateSync(const QString& windowId, const QString& screenId);
+    /// Add @p windowId to @p state at the position dictated by the
+    /// insertion-order setting (End / AfterFocused / AsMaster). Shared by
+    /// insertWindow's new-window path and handoffReceive's cross-engine adopt.
+    void insertWindowByConfigOrder(PhosphorTiles::TilingState* state, const QString& windowId);
     void removeWindow(const QString& windowId);
 
     /// Algorithm lifecycle REMOVE hook + state removal for a tracked window,
@@ -1049,6 +1135,18 @@ private:
     bool storeWindowMinSize(const QString& windowId, int minWidth, int minHeight);
     bool recalculateLayout(const QString& screenId);
     void applyTiling(const QString& screenId);
+
+    /**
+     * @brief Tier-A interactive-resize reflow for tree/memory algorithms.
+     *
+     * Maps the moved edge(s) of @p windowId to the owning SplitTree split(s)
+     * and adjusts their ratios so neighbours absorb the resize. Returns true if
+     * at least one split ratio actually changed (caller should retile). The
+     * split's extent is read from the currently rendered zones so the math
+     * stays in the same coordinate space as @p newFrame.
+     */
+    bool applyTreeResizeReflow(PhosphorTiles::TilingState* state, const QString& windowId, const QRect& oldFrame,
+                               const QRect& newFrame, const QString& screenId);
     bool shouldTileWindow(const QString& windowId) const;
     QString screenForWindow(const QString& windowId) const;
     QRect screenGeometry(const QString& screenId) const;
@@ -1113,8 +1211,20 @@ private:
      */
     PhosphorEngine::TilingStateKey currentKeyForScreen(const QString& screenId) const
     {
-        auto it = m_screenDesktopOverride.constFind(screenId);
-        int desktop = (it != m_screenDesktopOverride.constEnd()) ? it.value() : m_currentDesktop;
+        // Precedence (highest first):
+        //   1. sticky-pin override (m_screenDesktopOverride) — a CORRECTNESS
+        //      constraint: sticky on-all-desktops windows must keep their state on
+        //      the desktop where they live, so the pin must win;
+        //   2. per-output virtual desktop (m_screenCurrentDesktop, Plasma 6.7) —
+        //      the normal per-screen input;
+        //   3. the global current desktop (m_currentDesktop) — fallback.
+        int desktop = m_currentDesktop;
+        if (auto perOut = m_screenCurrentDesktop.constFind(screenId); perOut != m_screenCurrentDesktop.constEnd()) {
+            desktop = perOut.value();
+        }
+        if (auto pin = m_screenDesktopOverride.constFind(screenId); pin != m_screenDesktopOverride.constEnd()) {
+            desktop = pin.value();
+        }
         return PhosphorEngine::TilingStateKey{screenId, desktop, m_currentActivity};
     }
 
@@ -1263,16 +1373,6 @@ private:
     QString currentAppIdFor(const QString& anyWindowId) const;
 
     /**
-     * @brief Sync shortcut-adjusted ratio/count to config and settings
-     *
-     * Called by NavigationController after increase/decreaseMasterRatio/Count.
-     * Updates per-algorithm saved settings and writes to Settings (signal-blocked)
-     * so that subsequent propagateGlobalSplitRatio() calls and settings syncs
-     * don't overwrite the shortcut-adjusted values.
-     */
-    void syncShortcutAdjustmentToSettings();
-
-    /**
      * @brief Shared toggle-float implementation for toggleFocusedWindowFloat/toggleWindowFloat
      *
      * Toggles the floating state, retiles, and emits windowFloatingChanged.
@@ -1295,6 +1395,10 @@ private:
     PhosphorZones::LayoutRegistry* m_layoutManager = nullptr;
     PhosphorEngine::IWindowTrackingService* m_windowTracker = nullptr;
     PhosphorScreens::ScreenManager* m_screenManager = nullptr;
+    /// Borrowed cross-surface resolver (neighbouring output / desktop lookup);
+    /// null when not injected, in which case directional navigation stops at the
+    /// layout boundary instead of crossing surfaces.
+    PhosphorEngine::ICrossSurfaceResolver* m_crossSurfaceResolver = nullptr;
     PhosphorEngine::IWindowRegistry* m_windowRegistry = nullptr;
     PhosphorTiles::ITileAlgorithmRegistry* m_algorithmRegistry = nullptr; ///< Borrowed; outlives engine
     std::unique_ptr<AutotileConfig> m_config;
@@ -1312,11 +1416,27 @@ private:
     // behaviour). See RestorePositionPredicate doc above.
     RestorePositionPredicate m_restorePositionPredicate{};
 
+    // Rule-driven open-floating gate. Empty until the daemon wires it; while empty
+    // no window is rule-floated. See FloatPredicate doc above.
+    FloatPredicate m_floatPredicate{};
+
     QSet<QString> m_autotileScreens;
     QString m_algorithmId;
     bool m_algorithmEverSet = false; ///< True after first successful setAlgorithm() call
     QString m_activeScreen; // Last-focused screen (updated by onWindowFocused)
     QHash<PhosphorEngine::TilingStateKey, PhosphorTiles::TilingState*> m_screenStates; // Owned via Qt parent (this)
+
+    // Screen+desktop states whose split ratio / master count the user has
+    // explicitly tuned (keyboard shortcut or interactive resize). propagateGlobal*
+    // skips these so a per-desktop tweak survives a settings refresh and is never
+    // written into the global config — keeping the adjustment local to that
+    // (screen, desktop, activity). Cleared on an algorithm switch and when the
+    // user changes the corresponding global value in settings. This is
+    // within-session state only: it is not persisted, so the per-desktop tweak
+    // does not survive a daemon restart (neither does the value it guards —
+    // autotile persistence is per-window, not per-desktop ratio/count).
+    QSet<PhosphorEngine::TilingStateKey> m_userTunedSplitRatio;
+    QSet<PhosphorEngine::TilingStateKey> m_userTunedMasterCount;
 
     QHash<QString, PhosphorEngine::TilingStateKey> m_windowToStateKey; // windowId -> owning state key
     QHash<QString, QSize> m_windowMinSizes; // windowId -> minimum size from KWin
@@ -1358,6 +1478,15 @@ private:
     // currentKeyForScreen() returns the key of the existing PhosphorTiles::TilingState rather
     // than a new (empty) key after a desktop switch.
     QHash<QString, int> m_screenDesktopOverride;
+
+    // Per-screen current virtual desktop under Plasma 6.7 "switch desktops
+    // independently for each screen" (#648). Fed by setCurrentDesktopForScreen
+    // from the daemon's per-output desktop reports. Distinct from
+    // m_screenDesktopOverride (the sticky-pin map): the sticky pin is a
+    // correctness constraint and wins in currentKeyForScreen; this is the normal
+    // per-screen input. Empty when per-output desktops aren't in use, so every
+    // screen falls back to m_currentDesktop.
+    QHash<QString, int> m_screenCurrentDesktop;
 
     // Pre-seeded window order for snapping → autotile transitions.
     // Keyed by stable EDID-based screen ID (PhosphorScreens::ScreenIdentity::identifierFor).

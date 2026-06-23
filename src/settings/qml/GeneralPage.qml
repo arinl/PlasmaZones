@@ -45,6 +45,7 @@ SettingsFlickable {
         SettingsCard {
             headerText: i18n("Rendering")
             collapsible: true
+            searchAnchor: "rendering"
 
             contentItem: ColumnLayout {
                 spacing: Kirigami.Units.smallSpacing
@@ -52,6 +53,7 @@ SettingsFlickable {
                 SettingsRow {
                     title: i18n("Rendering backend")
                     description: i18n("Graphics API used for overlay rendering")
+                    searchAnchor: "renderingBackend"
 
                     ComboBox {
                         id: renderingBackendCombo
@@ -81,9 +83,44 @@ SettingsFlickable {
 
                 Kirigami.InlineMessage {
                     Layout.fillWidth: true
+                    // Match SettingsRow's horizontal inset so the banner lines
+                    // up with the rows above it instead of running edge-to-edge
+                    // to the card border.
+                    Layout.leftMargin: Kirigami.Units.largeSpacing
+                    Layout.rightMargin: Kirigami.Units.largeSpacing
                     type: Kirigami.MessageType.Information
                     text: settingsController.daemonRunning ? i18n("Stop the daemon to change the rendering backend.") : i18n("Rendering backend changes take effect after restarting the daemon.")
                     visible: settingsController.daemonRunning || appSettings.renderingBackend !== settingsController.generalPage.startupRenderingBackend
+                }
+            }
+        }
+
+        // =====================================================================
+        // LAYOUT ASSIGNMENT CARD
+        // =====================================================================
+        // Mode-neutral: the toggle governs the synthesized default for BOTH the
+        // snapping and tiling engines, so it lives on the General page rather
+        // than either mode's behavior page.
+        SettingsCard {
+            headerText: i18n("Layout assignment")
+            collapsible: true
+            searchAnchor: "layoutAssignment"
+
+            contentItem: ColumnLayout {
+                spacing: Kirigami.Units.smallSpacing
+
+                SettingsRow {
+                    title: i18n("Don't assign a layout by default")
+                    searchAnchor: "suppressDefaultLayoutAssignment"
+                    description: i18n("Snapping and tiling stay off until you assign a layout. A window rule can re-enable the default per monitor.")
+
+                    SettingsSwitch {
+                        checked: appSettings.suppressDefaultLayoutAssignment
+                        accessibleName: i18n("Don't assign a layout by default")
+                        onToggled: function (newValue) {
+                            appSettings.suppressDefaultLayoutAssignment = newValue;
+                        }
+                    }
                 }
             }
         }
@@ -100,6 +137,7 @@ SettingsFlickable {
         SettingsCard {
             headerText: i18n("Window filtering")
             collapsible: true
+            searchAnchor: "windowFiltering"
 
             contentItem: ColumnLayout {
                 spacing: Kirigami.Units.smallSpacing
@@ -107,6 +145,7 @@ SettingsFlickable {
                 SettingsRow {
                     title: i18n("Exclude transient windows")
                     description: i18n("Skip dialogs, popups, and toolbars for snapping and tiling")
+                    searchAnchor: "excludeTransient"
 
                     SettingsSwitch {
                         checked: appSettings.excludeTransientWindows
@@ -173,6 +212,7 @@ SettingsFlickable {
         // =====================================================================
         SettingsCard {
             headerText: i18n("Configuration")
+            searchAnchor: "configuration"
             collapsible: true
 
             contentItem: ColumnLayout {
@@ -180,6 +220,7 @@ SettingsFlickable {
 
                 SettingsRow {
                     title: i18n("Backup")
+                    searchAnchor: "backup"
                     description: i18n("Export all settings to a file")
 
                     Button {
@@ -194,6 +235,7 @@ SettingsFlickable {
 
                 SettingsRow {
                     title: i18n("Restore")
+                    searchAnchor: "restore"
                     description: i18n("Import settings from a previously exported file")
 
                     Button {
@@ -209,6 +251,7 @@ SettingsFlickable {
                 SettingsRow {
                     title: i18n("Reset")
                     description: i18n("Restore every setting on every page to its default value")
+                    searchAnchor: "resetDefaults"
 
                     Button {
                         text: i18n("Reset to Defaults")

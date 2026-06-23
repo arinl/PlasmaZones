@@ -8,6 +8,7 @@ import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import org.phosphor.animation
 import org.plasmazones.common as QFZCommon
+import "SearchAnchorHelpers.js" as SearchAnchors
 
 /**
  * @brief Grid delegate for displaying a single layout card
@@ -29,9 +30,14 @@ Item {
     // the root so child controls (auto-assign button, CategoryBadge) share a
     // single binding and stay consistent.
     readonly property bool globalAutoAssign: root.appSettings.autoAssignAllLayouts === true
-    // Selection state (bound from parent GridView)
+    // Selection state (bound by the hosting page against its selectedLayoutId)
     property bool isSelected: false
     property bool isHovered: false
+    // Inner padding of the card body (border → content). Single-sourced so the
+    // corner status/toggle icons — which offset back out past this inset with a
+    // negative anchor margin to sit near the card corner — can't drift off-corner
+    // if the body inset changes.
+    readonly property real _bodyInset: Kirigami.Units.largeSpacing
     // When false, the delegate's right-click context-menu affordance is
     // suppressed entirely (the underlying MouseArea drops RightButton
     // from `acceptedButtons`). Hosts that have no `layoutContextMenu`
@@ -49,6 +55,49 @@ Item {
 
     width: cellWidth
     height: cellHeight
+
+    // Small capability indicator (the memory / reflow / script-state card badges).
+    // One definition keeps the icon sizing, opacity, and hover-tooltip wiring in a
+    // single place; each instance sets only visible/source/color/text.
+    component CapabilityBadge: Kirigami.Icon {
+        id: badge
+
+        property string tooltipText
+
+        implicitWidth: Kirigami.Units.iconSizes.small
+        implicitHeight: Kirigami.Units.iconSizes.small
+        // Render as a mask tinted with `color` so every badge recolors uniformly:
+        // some symbolic icons (transform-scale, code-context) are not auto-recolored
+        // by the icon theme and would otherwise show a default grey, reading as
+        // "disabled" next to the recolored memory badge.
+        isMask: true
+        opacity: 0.7
+        ToolTip.delay: Kirigami.Units.toolTipDelay
+        ToolTip.visible: badgeHover.hovered && badge.visible
+        ToolTip.text: badge.tooltipText
+
+        HoverHandler {
+            id: badgeHover
+        }
+    }
+
+    // Register a per-layout deep-link anchor ("layout:<id>") with the host
+    // page's reveal registry so a layouts search result scrolls to and pulses
+    // this exact card (expanding its group card if collapsed). Deferred via
+    // callLater so the subtree is attached before the parent-chain walk; mirrors
+    // WindowRuleSectionList's per-row registration. No-op when hosted outside a
+    // SettingsFlickable (pageFor returns null).
+    Component.onCompleted: Qt.callLater(function () {
+        var pg = SearchAnchors.pageFor(root);
+        if (pg)
+            pg.registerSearchAnchor("layout:" + root.modelData.id, root, SearchAnchors.cardFor(root));
+    })
+    Component.onDestruction: {
+        var pg = SearchAnchors.pageFor(root);
+        if (pg)
+            pg.unregisterSearchAnchor("layout:" + root.modelData.id);
+    }
+
     Accessible.name: modelData.name || i18n("Unnamed Layout")
     Accessible.description: i18n("Layout with %1 zones", modelData.zoneCount || 0)
     Accessible.role: Accessible.ListItem
@@ -112,7 +161,9 @@ Item {
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: Kirigami.Units.smallSpacing
+            // Standard inner padding so the content (status icons, thumbnail,
+            // footer) doesn't hug the card border. smallSpacing was too tight.
+            anchors.margins: root._bodyInset
             spacing: Kirigami.Units.smallSpacing
 
             // Thumbnail area
@@ -142,6 +193,21 @@ Item {
                     fontStrikeout: root.appSettings ? root.appSettings.labelFontStrikeout : false
                     transformOrigin: Item.Center
                     scale: Math.min(1, safeParentWidth / safeImplicitWidth, safeParentHeight / safeImplicitHeight)
+
+                    // Hover the preview to read the layout/algorithm description.
+                    // Scoped to the thumbnail graphic (not the whole card) so it
+                    // never duels with the corner status-icon / toggle tooltips,
+                    // which sit clear of the centred preview. Hidden when the
+                    // model carries no description (user layouts often have none).
+                    readonly property string descriptionText: root.modelData.description !== undefined ? root.modelData.description : ""
+
+                    HoverHandler {
+                        id: thumbnailHover
+                    }
+
+                    ToolTip.delay: Kirigami.Units.toolTipDelay
+                    ToolTip.visible: thumbnailHover.hovered && layoutThumbnail.descriptionText.length > 0
+                    ToolTip.text: layoutThumbnail.descriptionText
                 }
 
                 // Top-left indicator row (default star + restriction badge)
@@ -153,7 +219,12 @@ Item {
 
                     anchors.top: parent.top
                     anchors.left: parent.left
-                    anchors.margins: Kirigami.Units.smallSpacing
+                    // The content column is inset by _bodyInset, but these corner
+                    // status icons read better tucked near the card edge. Offset
+                    // back out past the column inset so they sit a small padding
+                    // from the card corner, not the thumbnail's.
+                    anchors.topMargin: Kirigami.Units.smallSpacing - root._bodyInset
+                    anchors.leftMargin: Kirigami.Units.smallSpacing - root._bodyInset
                     spacing: Kirigami.Units.smallSpacing / 2
 
                     Kirigami.Icon {
@@ -236,7 +307,11 @@ Item {
                 Row {
                     anchors.top: parent.top
                     anchors.right: parent.right
-                    anchors.margins: Kirigami.Units.smallSpacing / 2
+                    // See the top-left row: offset back out past the column's
+                    // _bodyInset so the toggle buttons sit near the card corner
+                    // with a small padding.
+                    anchors.topMargin: Kirigami.Units.smallSpacing / 2 - root._bodyInset
+                    anchors.rightMargin: Kirigami.Units.smallSpacing / 2 - root._bodyInset
                     spacing: 0
 
                     // Auto-assign toggle (hidden for autotile — the tiling engine manages those).
@@ -305,25 +380,33 @@ Item {
                 }
 
                 // Memory indicator for algorithms that persist split state
-                Kirigami.Icon {
+                CapabilityBadge {
                     visible: root.modelData.supportsMemory === true
                     source: "document-save-symbolic"
-                    implicitWidth: Kirigami.Units.iconSizes.small
-                    implicitHeight: Kirigami.Units.iconSizes.small
                     color: Kirigami.Theme.positiveTextColor
-                    opacity: 0.7
                     Accessible.name: i18n("Persistent algorithm")
-                    ToolTip.delay: Kirigami.Units.toolTipDelay
-                    ToolTip.visible: memoryIconMA.containsMouse && visible
-                    ToolTip.text: i18n("Remembers split positions across window changes")
+                    tooltipText: i18n("Remembers split positions across window changes")
+                }
 
-                    MouseArea {
-                        id: memoryIconMA
+                // Reflow indicator for algorithms that adjust the layout when a
+                // tiled window is interactively resized.
+                CapabilityBadge {
+                    visible: root.modelData.reflowsOnResize === true
+                    source: "transform-scale-symbolic"
+                    color: Kirigami.Theme.highlightColor
+                    Accessible.name: i18n("Reflows")
+                    tooltipText: i18n("Reflows neighbouring windows when you resize a tiled window")
+                }
 
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        acceptedButtons: Qt.NoButton
-                    }
+                // Script-state indicator for scripted algorithms that persist an
+                // opaque per-screen state bag across retiles. Distinct colour from
+                // the reflow badge so the two are tellable apart when both show.
+                CapabilityBadge {
+                    visible: root.modelData.supportsScriptState === true
+                    source: "code-context-symbolic"
+                    color: Kirigami.Theme.neutralTextColor
+                    Accessible.name: i18n("Persistent script state")
+                    tooltipText: i18n("Remembers script-managed layout state across window changes")
                 }
 
                 QFZCommon.AspectRatioBadge {
@@ -333,7 +416,7 @@ Item {
                 Label {
                     elide: Text.ElideRight
                     font: Kirigami.Theme.smallFont
-                    color: root.isSelected ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.disabledTextColor
+                    color: Kirigami.Theme.disabledTextColor
                     text: i18n("%1 zones", root.modelData.zoneCount || 0)
                 }
             }

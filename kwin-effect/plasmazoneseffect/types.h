@@ -331,7 +331,7 @@ struct ShaderTransition
     ///   no `m_windowAnimator` animation to ride.
     /// • `durationMs == 0`: animator-driven — paintWindow reads progress
     ///   from `m_windowAnimator->animationFor(w)->state().value`. Used by
-    ///   zone.* events that flow through `applySnapGeometry` and inherit
+    ///   zone.* events that flow through `applyWindowGeometry` and inherit
     ///   the geometry animation's timeline.
     qint64 startTimeMs = 0;
     int durationMs = 0;
@@ -360,6 +360,15 @@ struct ShaderTransition
     /// Anchor-extent transitions (the default) keep the window-sized
     /// quad and uniforms.
     bool surfaceExtent = false;
+    /// Per-axis quad subdivision count for vertex-stage geometry
+    /// deformation, copied from the effect's `geometryGrid` metadata.
+    /// 0 (default) means `apply()` emits the single output-spanning
+    /// surface quad; > 0 means it emits an NxN grid of `WindowQuad` cells
+    /// over the window's destination rect so a custom vertex shader has
+    /// interior vertices to displace — the `flow` window-move effect lags
+    /// trailing grid rows behind the leading edge. Only honoured when
+    /// `surfaceExtent` is also true.
+    int gridSubdivisions = 0;
     /// Per-leg frame counter. Bumped each paintWindow tick where this
     /// transition feeds the shader; reset to 0 on every fresh
     /// beginShaderTransition install (or supersession). Mirrors the daemon's
@@ -463,7 +472,7 @@ struct ShaderTransition
     /// skip the morph uniforms.
     QRectF fromGeometry;
     QRectF toGeometry;
-    /// Set true when a morph transition begins (wired in applySnapGeometry);
+    /// Set true when a morph transition begins (wired in applyWindowGeometry);
     /// the first morph paint captures the still-old window content into
     /// `oldSnapshot` and clears this. The window content is captured before
     /// the moveResize configure round-trips, so it holds the OLD frame.
@@ -530,7 +539,7 @@ struct RestoreSuppression
     /// live geometry leaves this point — i.e. the repositioning configure
     /// has landed.
     QRectF spawnGeometry;
-    /// The resolved snap / tile rect, stamped by `applySnapGeometry` once
+    /// The resolved snap / tile rect, stamped by `applyWindowGeometry` once
     /// the window is actually being repositioned. Invalid until then:
     /// while invalid a geometry change is NOT treated as "settled" — it is
     /// just the client's own initial size negotiation — so suppression

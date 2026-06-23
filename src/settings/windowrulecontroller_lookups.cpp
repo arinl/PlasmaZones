@@ -21,6 +21,11 @@ void WindowRuleController::setActivityLookup(WindowRuleModel::LabelLookup fn)
     m_model.setActivityLabelLookup(std::move(fn));
 }
 
+void WindowRuleController::setZoneLookup(WindowRuleModel::LabelLookup fn)
+{
+    m_model.setZoneLabelLookup(std::move(fn));
+}
+
 void WindowRuleController::setSnappingLayoutLookup(WindowRuleModel::LabelLookup fn)
 {
     m_snappingLayoutLookup = std::move(fn);
@@ -39,6 +44,13 @@ void WindowRuleController::setShaderEffectLookup(WindowRuleModel::LabelLookup fn
     // match/placement resolvers — a rule whose resolver isn't installed yet
     // falls back to the raw id, then refreshes once it lands.
     m_model.setShaderEffectLabelLookup(std::move(fn));
+}
+
+void WindowRuleController::setOverlayShaderLookup(WindowRuleModel::LabelLookup fn)
+{
+    // Same separate-wiring rationale as setShaderEffectLookup above; the overlay
+    // shader registry is distinct from the animation one.
+    m_model.setOverlayShaderLabelLookup(std::move(fn));
 }
 
 void WindowRuleController::setCurveLabelResolver(const QJSValue& resolver)

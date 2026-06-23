@@ -61,18 +61,21 @@ SettingsFlickable {
             Layout.fillWidth: true
             type: Kirigami.MessageType.Information
             visible: true
-            text: i18n("Motion sets bundle your per-event overrides into one shareable JSON file. Applying a set merges into your current overrides; paths it doesn't cover are left unchanged.")
+            text: i18n("Motion sets bundle your per-event overrides into one shareable JSON file. Applying a set merges into your current overrides. Paths it doesn't cover are left unchanged.")
         }
 
         SettingsCard {
             Layout.fillWidth: true
             headerText: i18n("Save current state")
+            searchAnchor: "saveMotionSet"
 
             contentItem: ColumnLayout {
                 spacing: Kirigami.Units.smallSpacing
 
                 Label {
                     Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing
+                    Layout.rightMargin: Kirigami.Units.largeSpacing
                     text: i18n("Capture every per-event override file as a named motion set.")
                     color: Kirigami.Theme.disabledTextColor
                     wrapMode: Text.WordWrap
@@ -86,6 +89,8 @@ SettingsFlickable {
                 // matches typeflow (name → description → save).
                 ColumnLayout {
                     Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing
+                    Layout.rightMargin: Kirigami.Units.largeSpacing
                     spacing: Kirigami.Units.smallSpacing
 
                     TextField {
@@ -142,6 +147,7 @@ SettingsFlickable {
         SettingsCard {
             Layout.fillWidth: true
             headerText: i18n("Saved sets (%1)", root.motionSetsList.length)
+            searchAnchor: "savedMotionSets"
 
             contentItem: ColumnLayout {
                 spacing: Kirigami.Units.smallSpacing
@@ -152,6 +158,8 @@ SettingsFlickable {
                     color: Kirigami.Theme.disabledTextColor
                     font.italic: true
                     Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing
+                    Layout.rightMargin: Kirigami.Units.largeSpacing
                 }
 
                 Repeater {
@@ -161,6 +169,8 @@ SettingsFlickable {
                         required property var modelData
 
                         Layout.fillWidth: true
+                        Layout.leftMargin: Kirigami.Units.largeSpacing
+                        Layout.rightMargin: Kirigami.Units.largeSpacing
                         spacing: Kirigami.Units.smallSpacing
 
                         ColumnLayout {

@@ -29,12 +29,12 @@
 #include "settings/windowrulecontroller.h"
 #include "settings/windowrulemodel.h"
 
-#include <PhosphorWindowRule/MatchExpression.h>
-#include <PhosphorWindowRule/RuleAction.h>
-#include <PhosphorWindowRule/WindowRule.h>
+#include <PhosphorWindowRules/MatchExpression.h>
+#include <PhosphorWindowRules/RuleAction.h>
+#include <PhosphorWindowRules/WindowRule.h>
 
 using namespace PlasmaZones;
-using namespace PhosphorWindowRule;
+using namespace PhosphorWindowRules;
 
 class TestWindowRuleController : public QObject
 {
@@ -57,6 +57,7 @@ private Q_SLOTS:
     void userAuthorableFilterHidesInternalActions();
     void moveRuleReorders();
     void authoringMetadata();
+    void inputHints();
     void templatesProduceSeededRules();
     void actionTypesCarryDomain();
     void matchIsContextOnlyClassifies();
@@ -635,9 +636,9 @@ void TestWindowRuleController::userAuthorableFilterHidesInternalActions()
     // Register a sentinel descriptor flagged as non-authorable, walk the
     // picker, then restore the descriptor to its prior state so the rest
     // of the test suite isn't disturbed.
-    using PhosphorWindowRule::ActionDescriptor;
-    using PhosphorWindowRule::ActionDomain;
-    using PhosphorWindowRule::ActionRegistry;
+    using PhosphorWindowRules::ActionDescriptor;
+    using PhosphorWindowRules::ActionDomain;
+    using PhosphorWindowRules::ActionRegistry;
 
     static const QString kSentinelType = QStringLiteral("test-sentinel-internal-action");
     auto& registry = ActionRegistry::instance();
@@ -787,8 +788,10 @@ void TestWindowRuleController::authoringMetadata()
     // Picker categories drive the fly-out submenu grouping. Every field carries
     // a non-empty category label + a categoryOrder int. The Field enum
     // interleaves state/context, so assert grouping is by CATEGORY (via the
-    // language-independent order), not by enum position: Identity=0, State=1,
-    // Size=2, Context=3.
+    // language-independent order), not by enum position. The (formerly single,
+    // 19-entry) State bucket is split into fine-grained categories:
+    // Identity=0, Type=1, State=2, Taskbar & switcher=3, Tiling=4, Size=5,
+    // Context=6.
     QHash<QString, int> fieldCategoryOrder;
     for (const QVariant& v : fields) {
         const QVariantMap f = v.toMap();
@@ -803,11 +806,17 @@ void TestWindowRuleController::authoringMetadata()
                                   f.value(QStringLiteral("categoryOrder")).toInt());
     }
     QCOMPARE(fieldCategoryOrder.value(QStringLiteral("appId")), 0); // Identity
-    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("isFullscreen")), 1); // State
-    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("isMaximized")), 1); // State (after Context in enum order)
-    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("width")), 2); // Size
-    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("height")), 2); // Size
-    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("screenId")), 3); // Context
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("windowType")), 1); // Type
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("isTransient")), 1); // Type
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("isFullscreen")), 2); // State
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("isMaximized")), 2); // State (after Context in enum order)
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("skipTaskbar")), 3); // Taskbar & switcher
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("skipSwitcher")), 3); // Taskbar & switcher
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("isFloating")), 4); // Tiling
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("zone")), 4); // Tiling
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("width")), 5); // Size
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("height")), 5); // Size
+    QCOMPARE(fieldCategoryOrder.value(QStringLiteral("screenId")), 6); // Context
 
     // The four match conditions (IsTransient/IsNotification/Width/Height) must be
     // authorable: present in the picker with the correct value kind, and with
@@ -889,6 +898,49 @@ void TestWindowRuleController::authoringMetadata()
     QCOMPARE(actionCategoryOrder.value(QStringLiteral("exclude")), 2); // Window
     QCOMPARE(actionCategoryOrder.value(QStringLiteral("setOpacity")), 3); // Appearance
     QCOMPARE(actionCategoryOrder.value(QStringLiteral("excludeAnimations")), 4); // Animation
+}
+
+void TestWindowRuleController::inputHints()
+{
+    WindowRuleController controller;
+
+    // Match-condition value hints are keyed on the operator wire token: the
+    // operators whose value editor is a plain text box AND whose syntax /
+    // matching semantics aren't obvious carry a hint; the self-explanatory ones
+    // (and the picker / spin-box operators) carry none. Pins the QML contract —
+    // MatchLeafEditor calls matchValueHint(node.op) and shows the result beneath
+    // the value field — so a regression that drops or widens it is caught.
+    QVERIFY2(!controller.matchValueHint(QStringLiteral("regex")).isEmpty(),
+             "the regex operator must carry an input hint");
+    QVERIFY2(!controller.matchValueHint(QStringLiteral("appIdMatches")).isEmpty(),
+             "the app-id-match operator must carry an input hint");
+    QVERIFY2(controller.matchValueHint(QStringLiteral("equals")).isEmpty(),
+             "equals is self-explanatory and must carry no hint");
+    QVERIFY2(controller.matchValueHint(QStringLiteral("contains")).isEmpty(),
+             "contains is self-explanatory and must carry no hint");
+    QVERIFY2(controller.matchValueHint(QString()).isEmpty(), "an empty operator token yields no hint");
+
+    // The SnapToZone action's `zones` param carries an input hint (its free-text
+    // ordinal-list syntax isn't discoverable from the field). The hint rides on
+    // the param descriptor in actionTypes() — ActionRow reads `param.hint`.
+    const QVariantList actions = controller.actionTypes();
+    bool sawSnapToZoneZones = false;
+    for (const QVariant& a : actions) {
+        const QVariantMap action = a.toMap();
+        if (action.value(QStringLiteral("value")).toString() != QLatin1String("snapToZone")) {
+            continue;
+        }
+        for (const QVariant& p : action.value(QStringLiteral("params")).toList()) {
+            const QVariantMap param = p.toMap();
+            if (param.value(QStringLiteral("key")).toString() != QLatin1String("zones")) {
+                continue;
+            }
+            sawSnapToZoneZones = true;
+            QVERIFY2(!param.value(QStringLiteral("hint")).toString().isEmpty(),
+                     "SnapToZone's zones param must carry an input hint");
+        }
+    }
+    QVERIFY2(sawSnapToZoneZones, "actionTypes() must expose the SnapToZone zones param");
 }
 
 void TestWindowRuleController::templatesProduceSeededRules()

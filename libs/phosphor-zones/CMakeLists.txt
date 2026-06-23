@@ -13,9 +13,9 @@
 # autotile algorithms (phosphor-tile-algo, future work).
 #
 # Self-contained: depends only on Qt6 + PhosphorLayoutApi (PUBLIC) and
-# PhosphorIdentity (PRIVATE — used by Layout::matchAppRule for
-# composite window-id parsing; the dep doesn't leak through any public
-# PhosphorZones header).
+# PhosphorIdentity (PRIVATE — used for virtual-screen id parsing
+# (VirtualScreenId) in geometryutils / layoutregistry_assignments; the dep
+# doesn't leak through any public PhosphorZones header).
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -34,7 +34,7 @@ include(GenerateExportHeader)
 # Dependencies
 # ═══════════════════════════════════════════════════════════════════════════════
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Core Gui)
 
 # PhosphorLayoutApi provides the LayoutPreview / ILayoutSource contract that
 # this library implements via ZonesLayoutSource (see src/zoneslayoutsource.cpp).
@@ -72,6 +72,7 @@ set(phosphorzones_public_HDRS
     include/PhosphorZones/ZoneDefaults.h
     include/PhosphorZones/ZoneJsonKeys.h
     include/PhosphorZones/Layout.h
+    include/PhosphorZones/LayoutSettingsStore.h
     include/PhosphorZones/ZoneDetector.h
     include/PhosphorZones/ZoneHighlighter.h
     include/PhosphorZones/LayoutUtils.h
@@ -90,6 +91,7 @@ set(phosphorzones_public_HDRS
 set(phosphorzones_SRCS
     src/zone.cpp
     src/layout.cpp
+    src/layoutsettingsstore.cpp
     src/layout/factories.cpp
     src/layout/serialization.cpp
     src/zonedetector.cpp
@@ -162,11 +164,11 @@ target_link_libraries(PhosphorZones
         # LayoutRegistry resolves the assignment cascade through a
         # WindowRuleStore + RuleEvaluator; the store type is referenced in
         # the public LayoutRegistry.h ctor signature so the dep is PUBLIC.
-        PhosphorWindowRule::PhosphorWindowRule
+        PhosphorWindowRules::PhosphorWindowRules
     PRIVATE
-        # Layout::matchAppRule uses PhosphorIdentity::WindowId for
-        # composite window-id parsing; PRIVATE because the dep doesn't
-        # leak through any public PhosphorZones header.
+        # Uses PhosphorIdentity::VirtualScreenId for virtual-screen id parsing
+        # (geometryutils / layoutregistry_assignments); PRIVATE because the dep
+        # doesn't leak through any public PhosphorZones header.
         PhosphorIdentity::PhosphorIdentity
         # GeometryUtils calls ScreenManager geometry queries, and LayoutRegistry
         # uses ScreenIdentity / VirtualScreen for assignment-cascade screen-id

@@ -104,10 +104,23 @@ ColumnLayout {
             // layout, etc.) so the user can SEE what the rule contains
             // rather than an empty pill.
             var layouts = root.appSettings && root.appSettings.layouts ? root.appSettings.layouts : [];
-            for (var j = 0; j < layouts.length; ++j) {
-                if (layouts[j].id === raw) {
-                    var name = layouts[j].displayName;
-                    return name ? name : rawStr;
+            // Snapping layouts are stored by UUID, which keys the layouts list
+            // directly. Tiling-algorithm actions store the BARE registry token
+            // ("bsp"), while the layouts list keys autotile entries as
+            // "autotile:<token>" — so prefix before matching, mirroring the C++
+            // summary resolver (SettingsController::resolveTilingAlgorithmLookup)
+            // and the editor's `_tilingAlgorithmEditor`. Try the prefixed form
+            // first, then the bare token (covering already-prefixed / bare-keyed
+            // data) before falling back to the raw id.
+            var candidates = [raw];
+            if (kind === "tilingAlgorithm" && rawStr.indexOf("autotile:") !== 0)
+                candidates = ["autotile:" + rawStr, rawStr];
+            for (var c = 0; c < candidates.length; ++c) {
+                for (var j = 0; j < layouts.length; ++j) {
+                    if (layouts[j].id === candidates[c]) {
+                        var name = layouts[j].displayName;
+                        return name ? name : rawStr;
+                    }
                 }
             }
             return rawStr;
@@ -139,6 +152,20 @@ ColumnLayout {
             }
             return rawStr;
         }
+        if (kind === "overlayShader") {
+            // Overlay shaders come from the snapping-shaders registry, not the
+            // animation one (mirrors ActionRow's _overlayShaderEditor source).
+            var ssCtl = root.appSettings ? root.appSettings.snappingShadersPage : null;
+            if (!ssCtl)
+                return rawStr;
+
+            var overlayEffects = ssCtl.availableShaderEffects() || [];
+            for (var oe = 0; oe < overlayEffects.length; ++oe) {
+                if (overlayEffects[oe].id === raw)
+                    return overlayEffects[oe].name;
+            }
+            return rawStr;
+        }
         if (kind === "curveEditor") {
             // CurvePresets.curveLabel is the single source of truth for the
             // spring (`spring:omega,zeta`) + easing display name, shared with
@@ -152,6 +179,12 @@ ColumnLayout {
                 var scale = param.scale || 1;
                 return Math.round(f / scale) + "%";
             }
+            return rawStr;
+        }
+        if (kind === "zoneOrdinals") {
+            // `raw` is a JS array of 1-based zone ordinals; render "1, 2".
+            if (Array.isArray(raw))
+                return raw.join(", ");
             return rawStr;
         }
         return rawStr;

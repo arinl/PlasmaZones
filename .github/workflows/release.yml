@@ -85,7 +85,7 @@ jobs:
           echo "Version: $VERSION (prerelease=$IS_PRE)"
 
   # ═══════════════════════════════════════════════════════════════════════════
-  # Build Debian Package (KDE Neon - ships Plasma/KF6 6.6+)
+  # Build Debian Package (KDE Neon - ships Plasma/KF6 6.7+)
   # ═══════════════════════════════════════════════════════════════════════════
   build-deb:
     name: Build .deb (KDE Neon)
@@ -164,7 +164,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        fedora: [43, 44]
+        # Fedora 44 is the earliest release whose repos carry Plasma 6.7
+        # (KF 6.26 / Qt 6.10 / KWin 6.7), the PlasmaZones build baseline.
+        fedora: [44]
     container:
       image: fedora:${{ matrix.fedora }}
 
@@ -365,8 +367,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
-    outputs:
-      kwin-version: ${{ steps.kwin-version.outputs.version }}
 
     steps:
       - name: Install prerequisites
@@ -386,16 +386,6 @@ jobs:
             kconfig kconfigwidgets \
             kcmutils kglobalaccel \
             qt6-wayland plasma-activities
-
-      - name: Capture build-time KWin version
-        id: kwin-version
-        # The kwin-effect plugin's IID embeds KWin's exact upstream version.
-        # We record the version we built against so the binary AUR PKGBUILD
-        # can pin to it (KWin refuses to load effects with mismatched IIDs).
-        run: |
-          KWIN_VER=$(pacman -Q kwin | awk '{print $2}' | cut -d- -f1)
-          echo "version=$KWIN_VER" >> "$GITHUB_OUTPUT"
-          echo "Built against KWin $KWIN_VER"
 
       - name: Configure
         run: |
@@ -505,14 +495,15 @@ jobs:
           arch=('x86_64')
           url="https://github.com/fuddlesworth/PlasmaZones"
           license=('GPL-3.0-or-later' 'LGPL-2.1-or-later')
-          # Exact KWin upstream pin — mirrors packaging/arch/PKGBUILD. kwin is
-          # installed in the CI build env, so this resolves at parse time.
-          _kwin_ver=$(pacman -Q kwin 2>/dev/null | awk '{print $2}' | cut -d- -f1)
+          # KWin minimum, not an exact pin — mirrors packaging/arch/PKGBUILD.
+          # An exact pin holds KWin back on -Syu and strands the desktop in a
+          # half-upgraded Plasma; the mismatched effect is harmless (KWin skips
+          # it). See packaging/arch/PKGBUILD for the full rationale.
           depends=(
               'qt6-base' 'qt6-declarative' 'qt6-shadertools' 'qt6-svg'
               'kconfig' 'kconfigwidgets' 'kirigami'
               'kcmutils' 'kglobalaccel' 'qt6-wayland'
-              "kwin${_kwin_ver:+=}${_kwin_ver}"
+              'kwin>=6.7.0'
           )
           makedepends=('cmake' 'extra-cmake-modules' 'qt6-tools' 'ninja')
           optdepends=('plasma-activities: activity-based layouts')
@@ -585,7 +576,10 @@ jobs:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build via flake
-        run: nix build -L .#default
+        # --fallback: build from source if a binary substitute fails, so
+        # transient cache.nixos.org corruption (e.g. a hash mismatch on a
+        # transitive dep's NAR) can't red a release. Mirrors ci.yml.
+        run: nix build -L --fallback .#default
 
       - name: Verify package version
         run: |
@@ -655,15 +649,8 @@ jobs:
             echo ""
             echo "**Fedora (manual RPM):**"
             echo '```bash'
-            echo "# Fedora 43"
-            echo "sudo dnf install plasmazones-${VERSION}-*.fc43.x86_64.rpm"
             echo "# Fedora 44"
             echo "sudo dnf install plasmazones-${VERSION}-*.fc44.x86_64.rpm"
-            echo '```'
-            echo ""
-            echo "**openSUSE Tumbleweed (manual RPM):**"
-            echo '```bash'
-            echo "sudo zypper install plasmazones-${VERSION}-*.x86_64.rpm"
             echo '```'
             echo ""
             echo "**openSUSE Tumbleweed (OBS):**"
@@ -814,7 +801,6 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
           SHA256: ${{ steps.hash.outputs.sha256 }}
-          KWIN_VERSION: ${{ needs.build-generic.outputs.kwin-version }}
         run: |
           git clone ssh://aur@aur.archlinux.org/plasmazones-bin.git /tmp/aur-bin
           cd /tmp/aur-bin
@@ -827,8 +813,6 @@ jobs:
           # Update version and hash. Use the same awk-anchored array
           # rewrite as the source PKGBUILD (below) so future additional
           # `source=` entries don't silently leave a stale second hash.
-          # Also pin _kwin_ver to the exact KWin this binary was built
-          # against — the effect plugin IID embeds KWin's version string.
           sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
           awk -v sum="$SHA256" '
@@ -850,7 +834,6 @@ jobs:
             in_block { next }
             { print }
           ' PKGBUILD > PKGBUILD.new && mv PKGBUILD.new PKGBUILD
-          sed -i "s/^_kwin_ver=.*/_kwin_ver=$KWIN_VERSION/" PKGBUILD
 
           # Generate .SRCINFO (mount files read-only to avoid chown breaking host git).
           # Enumerate inputs explicitly rather than `cp /build/*` so a future
@@ -977,7 +960,7 @@ jobs:
   #      (Home Project -> Create Package), or via osc:
   #        osc meta pkg -e home:fuddlesworth plasmazones
   #   3. In the project's "Repositories" tab add openSUSE_Tumbleweed for
-  #      x86_64 and aarch64. PlasmaZones needs Plasma/KF6/Qt 6.6+, so Leap
+  #      x86_64 and aarch64. PlasmaZones needs Plasma/KF6/Qt 6.7+, so Leap
   #      is not a viable target — Tumbleweed (and optionally Slowroll) only.
   #   4. Add two GitHub Actions secrets (Settings -> Secrets and variables
   #      -> Actions):
@@ -987,9 +970,10 @@ jobs:
   #      users are not split across two repositories.
   publish-obs:
     name: Publish to openSUSE OBS
-    # `release` already transitively requires build-rpm-opensuse + every
-    # other distro build, so gating here on `release` keeps the smoke-test
-    # gate while also blocking publish if the GitHub release itself fails.
+    # Gating on `release` blocks publish if the GitHub release itself fails.
+    # `release` now needs build-rpm-opensuse, so the in-CI Tumbleweed smoke
+    # build transitively pre-gates this publish again. OBS then rebuilds the
+    # submitted spec on its own infrastructure.
     # Same shape as publish-aur so the two run as parallel siblings.
     needs: [version, release]
     runs-on: ubuntu-latest

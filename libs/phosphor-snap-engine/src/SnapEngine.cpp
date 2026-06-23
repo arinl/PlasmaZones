@@ -7,6 +7,8 @@
 #include <PhosphorSnapEngine/INavigationStateProvider.h>
 #include <PhosphorSnapEngine/IZoneAdjacencyResolver.h>
 #include <PhosphorSnapEngine/ISnapSettings.h>
+#include <PhosphorZones/LayoutRegistry.h>
+#include <PhosphorZones/AssignmentEntry.h>
 #include "snapenginelogging.h"
 
 namespace PhosphorSnapEngine {
@@ -101,6 +103,16 @@ void SnapEngine::setZoneAdjacencyResolver(IZoneAdjacencyResolver* resolver)
     }
 }
 
+void SnapEngine::setCrossSurfaceResolver(PhosphorEngine::ICrossSurfaceResolver* resolver)
+{
+    m_crossSurfaceResolver = resolver;
+    // Push into the target resolver if it has been constructed; otherwise
+    // ensureTargetResolver() picks it up on first navigation.
+    if (m_targetResolver) {
+        m_targetResolver->setCrossSurfaceResolver(resolver);
+    }
+}
+
 SnapNavigationTargetResolver* SnapEngine::ensureTargetResolver(const QString& action)
 {
     if (m_targetResolver) {
@@ -130,6 +142,15 @@ SnapNavigationTargetResolver* SnapEngine::ensureTargetResolver(const QString& ac
                const QString& targetZoneId, const QString& screenId) {
             Q_EMIT navigationFeedback(success, action, reason, sourceZoneId, targetZoneId, screenId);
         });
+    m_targetResolver->setCrossSurfaceResolver(m_crossSurfaceResolver);
+    // The resolver lacks the current (desktop, activity) context needed to read a
+    // neighbour output's mode; supply it so move/swap cross-output paths defer an
+    // autotile neighbour to the cross-mode handoff instead of snapping onto it.
+    m_targetResolver->setNeighbourAutotileProvider([this](const QString& screenId) {
+        return m_layoutManager
+            && m_layoutManager->modeForScreen(screenId, currentVirtualDesktopForScreen(screenId), currentActivity())
+            == PhosphorZones::AssignmentEntry::Autotile;
+    });
     return m_targetResolver.get();
 }
 
@@ -227,7 +248,7 @@ void SnapEngine::reapplyManagedWindowAppearance()
     // The compositor routes a non-empty-zoneId applyGeometryRequested through
     // its snap-commit path (markWindowSnapped), which re-hides the title bar and
     // redraws the snap border. The window is already in its zone, so the
-    // compositor's applySnapGeometry no-ops the move — this only re-drives the
+    // compositor's applyWindowGeometry no-ops the move — this only re-drives the
     // chrome the compositor dropped on bridge reconnect. No zone reassignment.
     const QStringList snapped = m_snapState->snappedWindows();
     for (const QString& windowId : snapped) {
@@ -238,7 +259,7 @@ void SnapEngine::reapplyManagedWindowAppearance()
         if (zoneIds.isEmpty()) {
             continue;
         }
-        const QString screenId = m_snapState->screenAssignments().value(windowId);
+        const QString screenId = m_snapState->screenForWindow(windowId);
         if (screenId.isEmpty()) {
             continue;
         }

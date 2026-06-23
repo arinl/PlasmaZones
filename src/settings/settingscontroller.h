@@ -33,11 +33,11 @@ namespace PhosphorSurfaceShaders {
 class SurfaceShaderRegistry;
 }
 
-namespace PhosphorWindowRule {
+namespace PhosphorWindowRules {
 // Forward-declared for the `std::unique_ptr<WindowRuleStore>` member
 // below. The complete type is needed only in settingscontroller.cpp
 // (where m_localRuleStore is constructed); pulling
-// <PhosphorWindowRule/WindowRuleStore.h> into the header would force
+// <PhosphorWindowRules/WindowRuleStore.h> into the header would force
 // every consumer of this controller to re-parse the WindowRuleStore
 // dependency graph.
 class WindowRuleStore;
@@ -166,6 +166,15 @@ public:
     /// the window; the D-Bus forward path just updates state and lets the
     /// user focus the existing window themselves.
     void setActivePage(const QString& page);
+
+    /// Navigate to an addressable target `pageId#anchor`. The page part is
+    /// resolved + switched via setActivePage (parent→leaf redirect, dirty
+    /// handling — identical to a sidebar click); the optional `#anchor`
+    /// fragment is stashed as a deep-link reveal request keyed to the
+    /// RESOLVED leaf page, so PageHost reveals it once the page is built.
+    /// A fragment-free address behaves byte-for-byte like setActivePage.
+    /// Entry point for `--page`/`--setting` CLI args and the D-Bus forward.
+    Q_INVOKABLE void navigateTo(const QString& address);
 
     static const QSet<QString>& validPageNames();
     static const QHash<QString, QString>& parentPageRedirects();
@@ -484,8 +493,6 @@ public:
     Q_INVOKABLE void setPerScreenSnappingSetting(const QString& screenName, const QString& key, const QVariant& value);
     Q_INVOKABLE void clearPerScreenSnappingSettings(const QString& screenName);
     Q_INVOKABLE bool hasPerScreenSnappingSettings(const QString& screenName) const;
-    Q_INVOKABLE bool hasPerScreenSnappingGapsSettings(const QString& screenName) const;
-    Q_INVOKABLE void clearPerScreenSnappingGapsSettings(const QString& screenName);
 
     // ── Virtual screen configuration ──────────────────────────────────────────
     Q_INVOKABLE QStringList getPhysicalScreens() const;
@@ -620,10 +627,10 @@ private:
 
     /// Single WindowRule store shared by m_settings (disable lists) and the
     /// LayoutRegistry. Declared FIRST so it outlives all borrowers.
-    std::unique_ptr<PhosphorWindowRule::WindowRuleStore> m_localRuleStore;
+    std::unique_ptr<PhosphorWindowRules::WindowRuleStore> m_localRuleStore;
     /// Opt-in cross-process auto-reload of m_localRuleStore on external writes
     /// (mainly the no-daemon case). Declared after the store; tears down first.
-    std::unique_ptr<PhosphorWindowRule::WindowRuleStoreWatcher> m_localRuleStoreWatcher;
+    std::unique_ptr<PhosphorWindowRules::WindowRuleStoreWatcher> m_localRuleStoreWatcher;
     /// Installs the process-global screen-id resolver before `m_settings`, whose
     /// constructor load()s and canonicalises per-screen override keys via
     /// `idForName`. Declared (and initialised) immediately before `m_settings`
@@ -761,25 +768,25 @@ private:
     /// and m_localAlgorithmRegistry reset.
     std::unique_ptr<AlgorithmService> m_algorithmService;
 
-    /// Tiling→Algorithm page sub-controller. Declared as unique_ptr (not
-    /// parented to `this`) and placed AFTER m_localAlgorithmRegistry so
-    /// reverse-order destruction runs ~TilingAlgorithmController BEFORE
-    /// the registry unique_ptr resets — the controller holds a raw pointer
-    /// to the registry. Parenting to `this` would defer destruction to
-    /// ~QObject, which runs AFTER these member unique_ptrs have already
-    /// released their borrowed targets.
+    /// Tiling→Algorithm page sub-controller. Held by unique_ptr and placed
+    /// AFTER m_localAlgorithmRegistry so reverse-order member destruction runs
+    /// ~TilingAlgorithmController (which holds a raw pointer to the registry)
+    /// BEFORE the registry unique_ptr resets. The unique_ptr — NOT ~QObject —
+    /// is what destroys it, so that ordering holds regardless of parent.
+    /// It is nonetheless constructed with parent `this` (see the ctor site):
+    /// registerPage adopts parent-LESS pages to m_app, which is destroyed
+    /// first and would double-free this object on close.
     std::unique_ptr<TilingAlgorithmController> m_tilingAlgorithmPage;
 
-    /// Snapping→Shaders page sub-controller. Same declaration-order
-    /// rationale as `m_tilingAlgorithmPage`: borrows
-    /// `m_localLayoutManager` (the registry walked by `shaderEffectUsages`
-    /// for the "Used in:" reverse-lookup), so it MUST be a `unique_ptr<>`
-    /// declared AFTER that registry. A QObject-child raw pointer would
-    /// defer destruction to ~QObject, which runs AFTER the registry's
-    /// unique_ptr has already reset, leaving the controller holding a
-    /// dangling layout-registry pointer if any teardown signal fires.
-    /// Borrows `m_overlayShaderRegistry` too, but that registry is a
-    /// QObject child of `this` and survives until ~QObject — fine.
+    /// Snapping→Shaders page sub-controller. Same rationale as
+    /// `m_tilingAlgorithmPage`: borrows `m_localLayoutManager` (the registry
+    /// walked by `shaderEffectUsages` for the "Used in:" reverse-lookup), so it
+    /// MUST be a `unique_ptr<>` declared AFTER that registry — the unique_ptr
+    /// reset (member order), not ~QObject, drives its destruction before the
+    /// borrowed registry resets. Constructed with parent `this` so registerPage
+    /// does not adopt it to the first-destroyed m_app (double-free on close).
+    /// Borrows `m_overlayShaderRegistry` too, but that registry is a QObject
+    /// child of `this` and survives until ~QObject — fine.
     std::unique_ptr<SnappingShadersPageController> m_snappingShadersPage;
 
     /// Recompute zone geometry for every manual layout in

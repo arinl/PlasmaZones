@@ -8,8 +8,8 @@
 #include "../phosphor_i18n.h"
 
 #include <PhosphorProtocol/WindowTypeEnum.h>
-#include <PhosphorWindowRule/MatchTypes.h>
-#include <PhosphorWindowRule/RuleAction.h>
+#include <PhosphorWindowRules/MatchTypes.h>
+#include <PhosphorWindowRules/RuleAction.h>
 
 #include <QLatin1StringView>
 #include <QList>
@@ -22,10 +22,10 @@ namespace PlasmaZones::WindowRuleAuthoring {
 
 namespace {
 
-namespace ActionType = PhosphorWindowRule::ActionType;
-using PhosphorWindowRule::Field;
-using PhosphorWindowRule::Operator;
-using PhosphorWindowRule::RuleAction;
+namespace ActionType = PhosphorWindowRules::ActionType;
+using PhosphorWindowRules::Field;
+using PhosphorWindowRules::Operator;
+using PhosphorWindowRules::RuleAction;
 
 /// One picker category: a translated label + a stable sort order. The field
 /// and action pickers group their (otherwise long, flat) entry lists into
@@ -38,33 +38,61 @@ struct PickerCategory
 
 /// Group a match Field into a picker category. The `Field` enum interleaves
 /// state and context (e.g. IsMaximized sits after Activity), so the picker
-/// groups by THIS classification, never by enum / emit order.
+/// groups by THIS classification, never by enum / emit order. The categories
+/// are deliberately fine-grained: a single flat "State" bucket of ~19 entries
+/// is hard to scan, so the window-kind, taskbar/switcher-hint, and
+/// PlasmaZones-tiling concepts each get their own top-level fly-out. Items
+/// within a category are sorted alphabetically by CategoryMenuButton; only the
+/// returned order int controls the relative position of the categories.
 PickerCategory fieldCategory(Field f)
 {
     switch (f) {
+    // Who the window is — identifiers a rule matches against.
     case Field::AppId:
     case Field::WindowClass:
     case Field::DesktopFile:
     case Field::WindowRole:
     case Field::Pid:
     case Field::Title:
+    case Field::CaptionNormal:
         return {PhosphorI18n::tr("Identity"), 0};
+    // What kind of window it is (its role/type), not a toggled runtime state.
     case Field::WindowType:
-    case Field::IsSticky:
-    case Field::IsFullscreen:
-    case Field::IsMinimized:
-    case Field::IsMaximized:
-    case Field::IsFocused:
     case Field::IsTransient:
+    case Field::IsModal:
     case Field::IsNotification:
-        return {PhosphorI18n::tr("State"), 1};
+        return {PhosphorI18n::tr("Type"), 1};
+    // Live window-manager state and chrome flags.
+    case Field::IsMaximized:
+    case Field::IsMinimized:
+    case Field::IsFullscreen:
+    case Field::IsFocused:
+    case Field::KeepAbove:
+    case Field::KeepBelow:
+    case Field::IsSticky:
+    case Field::HasDecoration:
+    case Field::IsResizable:
+        return {PhosphorI18n::tr("State"), 2};
+    // NETWM "skip" hints — whether the window opts out of the taskbar, pager,
+    // or Alt+Tab switcher.
+    case Field::SkipTaskbar:
+    case Field::SkipPager:
+    case Field::SkipSwitcher:
+        return {PhosphorI18n::tr("Taskbar & switcher"), 3};
+    // PlasmaZones-owned placement state.
+    case Field::IsFloating:
+    case Field::IsSnapped:
+    case Field::Zone:
+        return {PhosphorI18n::tr("Tiling"), 4};
     case Field::Width:
     case Field::Height:
-        return {PhosphorI18n::tr("Size"), 2};
+    case Field::PositionX:
+    case Field::PositionY:
+        return {PhosphorI18n::tr("Size"), 5};
     case Field::ScreenId:
     case Field::VirtualDesktop:
     case Field::Activity:
-        return {PhosphorI18n::tr("Context"), 3};
+        return {PhosphorI18n::tr("Context"), 6};
     }
     return {PhosphorI18n::tr("Other"), 99};
 }
@@ -83,7 +111,7 @@ QString fieldDescription(Field f)
     case Field::DesktopFile:
         return PhosphorI18n::tr("The application's desktop entry file name.");
     case Field::WindowRole:
-        return PhosphorI18n::tr("The window's X11 role (WM_WINDOW_ROLE); empty for Wayland-native windows.");
+        return PhosphorI18n::tr("The window's X11 role (WM_WINDOW_ROLE). Empty for Wayland-native windows.");
     case Field::Pid:
         return PhosphorI18n::tr("The window's process ID.");
     case Field::Title:
@@ -108,6 +136,35 @@ QString fieldDescription(Field f)
         return PhosphorI18n::tr("The window's width in pixels.");
     case Field::Height:
         return PhosphorI18n::tr("The window's height in pixels.");
+    case Field::KeepAbove:
+        return PhosphorI18n::tr("Whether the window is set to stay above other windows (always on top).");
+    case Field::KeepBelow:
+        return PhosphorI18n::tr("Whether the window is set to stay below other windows.");
+    case Field::SkipTaskbar:
+        return PhosphorI18n::tr("Whether the window is hidden from the taskbar.");
+    case Field::SkipPager:
+        return PhosphorI18n::tr("Whether the window is hidden from the pager.");
+    case Field::SkipSwitcher:
+        return PhosphorI18n::tr("Whether the window is hidden from the window switcher (Alt+Tab).");
+    case Field::IsModal:
+        return PhosphorI18n::tr("Whether the window is a modal dialog.");
+    case Field::HasDecoration:
+        return PhosphorI18n::tr("Whether the window has a server-side title-bar and border.");
+    case Field::IsResizable:
+        return PhosphorI18n::tr("Whether the window can be resized.");
+    case Field::PositionX:
+        return PhosphorI18n::tr("The window's left-edge X position in pixels.");
+    case Field::PositionY:
+        return PhosphorI18n::tr("The window's top-edge Y position in pixels.");
+    case Field::CaptionNormal:
+        return PhosphorI18n::tr("The window's title without the application-name suffix the window manager adds.");
+    case Field::IsFloating:
+        return PhosphorI18n::tr("Whether the window has been floated out of tiling (snap or autotile).");
+    case Field::IsSnapped:
+        return PhosphorI18n::tr(
+            "Whether the window is snapped into a zone (manual-zone mode, where tiled windows are not snapped).");
+    case Field::Zone:
+        return PhosphorI18n::tr("The zone the window is snapped into (manual-zone mode only).");
     case Field::ScreenId:
         return PhosphorI18n::tr("The monitor the window is on.");
     case Field::VirtualDesktop:
@@ -118,45 +175,47 @@ QString fieldDescription(Field f)
     return QString();
 }
 
-/// Group an action type (wire string) into a picker category. Mirrors the
-/// preferred-order clustering in actionTypes(): engine/layout, gaps, window
-/// management, appearance, animation.
+/// Group an action type into a picker category. Derives from the
+/// descriptor's `category` field — adding a new action to an existing
+/// category requires zero changes here.
 PickerCategory actionCategory(const QString& type)
 {
-    if (ActionType::isLayoutEngineContextAction(type)) {
+    const auto desc = PhosphorWindowRules::ActionRegistry::instance().descriptor(type);
+    if (!desc.has_value()) {
+        return {PhosphorI18n::tr("Other"), 99};
+    }
+    const QString& cat = desc->category;
+    if (cat == QLatin1String("layoutEngine")) {
         return {PhosphorI18n::tr("Layout & engine"), 0};
     }
-    if (type == ActionType::SetZonePadding || type == ActionType::SetOuterGap
-        || type == ActionType::SetUsePerSideOuterGap || type == ActionType::SetOuterGapTop
-        || type == ActionType::SetOuterGapBottom || type == ActionType::SetOuterGapLeft
-        || type == ActionType::SetOuterGapRight) {
+    if (cat == QLatin1String("gap")) {
         return {PhosphorI18n::tr("Gaps"), 1};
     }
-    if (type == ActionType::Exclude || type == ActionType::Float || type == ActionType::RestorePosition) {
+    if (cat == QLatin1String("windowManagement")) {
         return {PhosphorI18n::tr("Window"), 2};
     }
-    if (type == ActionType::SetOpacity || type == ActionType::SetHideTitleBar || type == ActionType::SetBorderVisible
-        || type == ActionType::SetBorderWidth || type == ActionType::SetBorderRadius
-        || type == ActionType::SetBorderColor) {
+    if (cat == QLatin1String("appearance") || cat == QLatin1String("borderAppearance")) {
         return {PhosphorI18n::tr("Appearance"), 3};
     }
-    if (type == ActionType::OverrideAnimationShader || type == ActionType::OverrideAnimationCurve
-        || type == ActionType::OverrideAnimationTiming || type == ActionType::ExcludeAnimations) {
+    if (cat == QLatin1String("animation")) {
         return {PhosphorI18n::tr("Animation"), 4};
+    }
+    if (cat == QLatin1String("overlay")) {
+        return {PhosphorI18n::tr("Overlay"), 5};
     }
     return {PhosphorI18n::tr("Other"), 99};
 }
 
 /// Translated label for one param key on action @p type. The structural
 /// schema (kind, min/max, scale, enum wire values) lives on the LGPL
-/// `ActionDescriptor` in PhosphorWindowRule; the GPL settings layer adds
+/// `ActionDescriptor` in PhosphorWindowRules; the GPL settings layer adds
 /// the user-visible label per `(type, key)` pair so translation runs
 /// through `PhosphorI18n::tr` and `lupdate` extracts the strings. A missing
 /// entry falls back to the wire key — visible in the picker, so a missing
 /// entry stands out for the next translator pass.
 QString paramLabel(const QString& type, const QString& key)
 {
-    namespace ActionParam = PhosphorWindowRule::ActionParam;
+    namespace ActionParam = PhosphorWindowRules::ActionParam;
     if (type == ActionType::SetEngineMode && key == ActionParam::Mode) {
         return PhosphorI18n::tr("Engine mode");
     }
@@ -171,6 +230,9 @@ QString paramLabel(const QString& type, const QString& key)
     }
     if (type == ActionType::SetOpacity && key == ActionParam::Value) {
         return PhosphorI18n::tr("Opacity (%)");
+    }
+    if (type == ActionType::SnapToZone && key == ActionParam::Zones) {
+        return PhosphorI18n::tr("Zones");
     }
     // Unsnapped-position restore override (window-domain, single bool value).
     if (type == ActionType::RestorePosition && key == ActionParam::Value) {
@@ -212,6 +274,13 @@ QString paramLabel(const QString& type, const QString& key)
         // by priority, so a higher-priority off rule cancels a lower-priority on.
         return PhosphorI18n::tr("Lock the layout (off = don't lock)");
     }
+    if (type == ActionType::DefaultLayoutAssignment && key == ActionParam::Value) {
+        // on = this context gets the global default layout even when the global
+        // "don't assign by default" setting is on; off = suppress the default for
+        // this context (no layout until one is explicitly assigned), overriding
+        // the global setting the other way. Single-winner by priority.
+        return PhosphorI18n::tr("Assign a default layout (off = leave unassigned)");
+    }
     if (type == ActionType::SetOuterGapTop && key == ActionParam::Value) {
         return PhosphorI18n::tr("Top gap (px)");
     }
@@ -223,6 +292,14 @@ QString paramLabel(const QString& type, const QString& key)
     }
     if (type == ActionType::SetOuterGapRight && key == ActionParam::Value) {
         return PhosphorI18n::tr("Right gap (px)");
+    }
+    // Context overlay-property overrides. These come BEFORE the generic
+    // EffectId / Value fallbacks so they win for the overlay actions.
+    if (type == ActionType::OverrideOverlayShader && key == ActionParam::EffectId) {
+        return PhosphorI18n::tr("Overlay shader");
+    }
+    if (type == ActionType::OverrideOverlayStyle && key == ActionParam::Value) {
+        return PhosphorI18n::tr("Overlay style");
     }
     if (key == ActionParam::Event) {
         return PhosphorI18n::tr("Event");
@@ -239,12 +316,29 @@ QString paramLabel(const QString& type, const QString& key)
     return key;
 }
 
+/// Optional translated input hint for action @p type, param @p key — a short line
+/// of guidance shown beneath the editor for params whose accepted input format is
+/// not obvious from the control itself (e.g. the free-text zone-ordinal list).
+/// Returns an empty string for params that need no hint (pickers, spin boxes,
+/// toggles, colour swatches are self-explanatory). Mirrors paramLabel — keyed on
+/// `(type, key)` so the hint stays next to the label it explains.
+QString paramHint(const QString& type, const QString& key)
+{
+    namespace ActionParam = PhosphorWindowRules::ActionParam;
+    if (type == ActionType::SnapToZone && key == ActionParam::Zones) {
+        return PhosphorI18n::tr(
+            "Zone numbers like “1, 2”, or a range like “1-3”. "
+            "Multiple zones snap the window to their combined area.");
+    }
+    return {};
+}
+
 /// Translated label for one enum wire value on action @p type, param @p key.
 /// Mirrors paramLabel — structural enum membership lives on the descriptor;
 /// the human-facing label is per `(type, key, wireValue)`.
 QString enumOptionLabel(const QString& type, const QString& key, const QString& wireValue)
 {
-    namespace ActionParam = PhosphorWindowRule::ActionParam;
+    namespace ActionParam = PhosphorWindowRules::ActionParam;
     if ((type == ActionType::SetEngineMode || type == ActionType::DisableEngine) && key == ActionParam::Mode) {
         if (wireValue == QLatin1String("snapping")) {
             return PhosphorI18n::tr("Snapping");
@@ -254,6 +348,14 @@ QString enumOptionLabel(const QString& type, const QString& key, const QString& 
         }
         if (wireValue == QLatin1String("scrolling")) {
             return PhosphorI18n::tr("Scrolling");
+        }
+    }
+    if (type == ActionType::OverrideOverlayStyle && key == ActionParam::Value) {
+        if (wireValue == PhosphorWindowRules::OverlayStyleToken::Rectangles) {
+            return PhosphorI18n::tr("Zone rectangles");
+        }
+        if (wireValue == PhosphorWindowRules::OverlayStyleToken::Preview) {
+            return PhosphorI18n::tr("Layout preview");
         }
     }
     return wireValue;
@@ -266,11 +368,11 @@ QString enumOptionLabel(const QString& type, const QString& key, const QString& 
 QVariantList paramsForActionTypeImpl(const QString& type)
 {
     QVariantList params;
-    const auto descriptor = PhosphorWindowRule::ActionRegistry::instance().descriptor(type);
+    const auto descriptor = PhosphorWindowRules::ActionRegistry::instance().descriptor(type);
     if (!descriptor.has_value()) {
         return params;
     }
-    for (const PhosphorWindowRule::ParamSchema& schema : descriptor->params) {
+    for (const PhosphorWindowRules::ParamSchema& schema : descriptor->params) {
         // A `ParamSchema` with an empty `key` is a misregistered descriptor
         // — the strict-key check in `RuleAction::fromJson` would reject any
         // payload built against it, leaving the editor with a permanently
@@ -283,6 +385,9 @@ QVariantList paramsForActionTypeImpl(const QString& type)
         p[QStringLiteral("key")] = schema.key;
         p[QStringLiteral("kind")] = schema.kind;
         p[QStringLiteral("label")] = paramLabel(type, schema.key);
+        if (const QString hint = paramHint(type, schema.key); !hint.isEmpty()) {
+            p[QStringLiteral("hint")] = hint;
+        }
         if (schema.min.has_value()) {
             p[QStringLiteral("min")] = *schema.min;
         }
@@ -328,11 +433,17 @@ QString actionTypeLabelImpl(const QString& type)
     if (type == ActionType::LockContext) {
         return PhosphorI18n::tr("Lock layout");
     }
+    if (type == ActionType::DefaultLayoutAssignment) {
+        return PhosphorI18n::tr("Default layout assignment");
+    }
     if (type == ActionType::Exclude) {
         return PhosphorI18n::tr("Exclude window");
     }
     if (type == ActionType::Float) {
         return PhosphorI18n::tr("Float window");
+    }
+    if (type == ActionType::SnapToZone) {
+        return PhosphorI18n::tr("Snap to zone(s)");
     }
     if (type == ActionType::RestorePosition) {
         return PhosphorI18n::tr("Restore position on login");
@@ -348,6 +459,12 @@ QString actionTypeLabelImpl(const QString& type)
     }
     if (type == ActionType::SetOpacity) {
         return PhosphorI18n::tr("Set opacity");
+    }
+    if (type == ActionType::OverrideOverlayShader) {
+        return PhosphorI18n::tr("Set overlay shader");
+    }
+    if (type == ActionType::OverrideOverlayStyle) {
+        return PhosphorI18n::tr("Set overlay style");
     }
     if (type == ActionType::ExcludeAnimations) {
         return PhosphorI18n::tr("Exclude from animations");
@@ -420,7 +537,7 @@ QString operatorLabelImpl(Operator op)
     // Wire-string fallback (same convention as paramLabel /
     // actionTypeFallbackLabel): a future operator missing a label entry
     // shows its raw token in the picker instead of a blank row.
-    return PhosphorWindowRule::operatorToString(op);
+    return PhosphorWindowRules::operatorToString(op);
 }
 
 } // namespace
@@ -446,7 +563,7 @@ QVariantList matchFields()
     // that replaced `kTypes` in actionTypes() below.
     static const QSet<Field> kHiddenFields = {Field::Pid, Field::WindowRole};
     QVariantList out;
-    for (int i = 0; i < PhosphorWindowRule::FieldCount; ++i) {
+    for (int i = 0; i < PhosphorWindowRules::FieldCount; ++i) {
         const auto f = static_cast<Field>(i);
         if (kHiddenFields.contains(f)) {
             continue;
@@ -455,7 +572,7 @@ QVariantList matchFields()
         entry[QStringLiteral("value")] = static_cast<int>(f);
         // The JSON wire string for this field — QML keys off this rather than
         // reconstructing the enum↔string table itself.
-        entry[QStringLiteral("wire")] = PhosphorWindowRule::fieldToString(f);
+        entry[QStringLiteral("wire")] = PhosphorWindowRules::fieldToString(f);
         entry[QStringLiteral("label")] = WindowRuleModel::fieldLabel(f);
         const PickerCategory fcat = fieldCategory(f);
         entry[QStringLiteral("category")] = fcat.label;
@@ -506,9 +623,9 @@ QVariantList matchFields()
                 options.append(option);
             }
             entry[QStringLiteral("options")] = options;
-        } else if (PhosphorWindowRule::fieldIsNumeric(f)) {
+        } else if (PhosphorWindowRules::fieldIsNumeric(f)) {
             kind = QStringLiteral("number");
-        } else if (PhosphorWindowRule::fieldIsBool(f)) {
+        } else if (PhosphorWindowRules::fieldIsBool(f)) {
             kind = QStringLiteral("bool");
         } else if (f == Field::ScreenId) {
             // QML editor swaps this for a screen-picker ComboBox driven by
@@ -531,12 +648,12 @@ QVariantList operatorsForField(int fieldValue)
 {
     // Bounded cast: QML hands us a raw int, and an out-of-range value must
     // not reach the Field classifiers (matchFields() bounds the same way).
-    if (fieldValue < 0 || fieldValue >= PhosphorWindowRule::FieldCount) {
+    if (fieldValue < 0 || fieldValue >= PhosphorWindowRules::FieldCount) {
         return {};
     }
     const Field field = static_cast<Field>(fieldValue);
     QList<Operator> ops;
-    if (PhosphorWindowRule::fieldIsString(field)) {
+    if (PhosphorWindowRules::fieldIsString(field)) {
         ops = {Operator::Equals, Operator::Contains, Operator::StartsWith, Operator::EndsWith, Operator::Regex};
         if (field == Field::AppId) {
             ops.append(Operator::AppIdMatches);
@@ -544,12 +661,12 @@ QVariantList operatorsForField(int fieldValue)
         if (field == Field::ScreenId || field == Field::Activity) {
             ops.append(Operator::In);
         }
-    } else if (PhosphorWindowRule::fieldIsNumeric(field)) {
+    } else if (PhosphorWindowRules::fieldIsNumeric(field)) {
         ops = {Operator::Equals, Operator::GreaterThan, Operator::LessThan};
         if (field == Field::VirtualDesktop) {
             ops.append(Operator::In);
         }
-    } else if (PhosphorWindowRule::fieldIsBool(field) || field == Field::WindowType) {
+    } else if (PhosphorWindowRules::fieldIsBool(field) || field == Field::WindowType) {
         ops = {Operator::Equals};
         if (field == Field::WindowType) {
             ops.append(Operator::In);
@@ -560,7 +677,7 @@ QVariantList operatorsForField(int fieldValue)
         QVariantMap entry;
         entry[QStringLiteral("value")] = static_cast<int>(op);
         // The JSON wire string for this operator — same contract as matchFields.
-        entry[QStringLiteral("wire")] = PhosphorWindowRule::operatorToString(op);
+        entry[QStringLiteral("wire")] = PhosphorWindowRules::operatorToString(op);
         entry[QStringLiteral("label")] = operatorLabelImpl(op);
         out.append(entry);
     }
@@ -573,101 +690,76 @@ QVariantList allOperators()
     // hand-maintained list — a new operator auto-surfaces here (and so widens
     // the leaf editor's operator-column sizing) the moment it's added.
     QVariantList out;
-    for (int i = 0; i < PhosphorWindowRule::OperatorCount; ++i) {
+    for (int i = 0; i < PhosphorWindowRules::OperatorCount; ++i) {
         const auto op = static_cast<Operator>(i);
         QVariantMap entry;
         entry[QStringLiteral("value")] = i;
-        entry[QStringLiteral("wire")] = PhosphorWindowRule::operatorToString(op);
+        entry[QStringLiteral("wire")] = PhosphorWindowRules::operatorToString(op);
         entry[QStringLiteral("label")] = operatorLabelImpl(op);
         out.append(entry);
     }
     return out;
 }
 
+QString matchValueHint(const QString& op)
+{
+    // Keyed on the operator wire token: only the operators whose value editor is
+    // a plain text box AND whose accepted syntax / matching semantics aren't
+    // obvious get a hint. equals / contains / starts-with / ends-with are
+    // self-explanatory; the picker / spin-box operators have no free-text field
+    // to annotate. The match-side counterpart to the action-side paramHint.
+    if (op == PhosphorWindowRules::operatorToString(Operator::Regex)) {
+        return PhosphorI18n::tr("Regular expression, e.g. ^(firefox|chromium)$");
+    }
+    if (op == PhosphorWindowRules::operatorToString(Operator::AppIdMatches)) {
+        return PhosphorI18n::tr("Matches by reverse-DNS segments, so “firefox” also matches “org.mozilla.firefox”.");
+    }
+    return {};
+}
+
 QVariantList actionTypes()
 {
-    // The picker order is meaningful (engine-mode first, then layout-shaping,
-    // then per-window overrides), but the registry returns types in QHash
-    // iteration order. Anchoring the order here keeps the picker stable
-    // without bringing back the hand-maintained type list — registered
-    // types not in this order list are appended after, alphabetically by
-    // wire string, so a future descriptor automatically shows up in the
-    // picker the moment it sets `userAuthorable = true`.
-    static const QList<QLatin1StringView> kPreferredOrder = {
-        ActionType::SetEngineMode,
-        ActionType::SetSnappingLayout,
-        ActionType::SetTilingAlgorithm,
-        ActionType::DisableEngine,
-        ActionType::LockContext,
-        // Per-context gap overrides (context-domain, grouped with the other
-        // context actions above).
-        ActionType::SetZonePadding,
-        ActionType::SetOuterGap,
-        ActionType::SetUsePerSideOuterGap,
-        ActionType::SetOuterGapTop,
-        ActionType::SetOuterGapBottom,
-        ActionType::SetOuterGapLeft,
-        ActionType::SetOuterGapRight,
-        ActionType::Exclude,
-        ActionType::Float,
-        ActionType::RestorePosition,
-        ActionType::SetOpacity,
-        // Per-window border / title-bar overrides (window-domain, grouped with
-        // the other per-window appearance actions).
-        ActionType::SetHideTitleBar,
-        ActionType::SetBorderVisible,
-        ActionType::SetBorderWidth,
-        ActionType::SetBorderRadius,
-        ActionType::SetBorderColor,
-        ActionType::OverrideAnimationShader,
-        ActionType::OverrideAnimationCurve,
-        ActionType::OverrideAnimationTiming,
-        ActionType::ExcludeAnimations,
+    const PhosphorWindowRules::ActionRegistry& registry = PhosphorWindowRules::ActionRegistry::instance();
+
+    struct TypeEntry
+    {
+        QString type;
+        QString categoryLabel;
+        int categoryOrder;
+        int displayOrder;
     };
-    const PhosphorWindowRule::ActionRegistry& registry = PhosphorWindowRule::ActionRegistry::instance();
-    QList<QString> orderedTypes;
-    QSet<QString> seen;
-    for (QLatin1StringView t : kPreferredOrder) {
-        const QString type = QString::fromLatin1(t);
-        const auto desc = registry.descriptor(type);
-        if (desc.has_value() && desc->userAuthorable) {
-            orderedTypes.append(type);
-            seen.insert(type);
-        }
-    }
-    QStringList trailing;
+    QList<TypeEntry> entries;
     for (const QString& type : registry.registeredTypes()) {
-        if (seen.contains(type)) {
+        const auto desc = registry.descriptor(type);
+        if (!desc.has_value() || !desc->userAuthorable) {
             continue;
         }
-        const auto desc = registry.descriptor(type);
-        if (desc.has_value() && desc->userAuthorable) {
-            trailing.append(type);
-        }
+        const PickerCategory acat = actionCategory(type);
+        entries.append({type, acat.label, acat.order, desc->displayOrder});
     }
-    std::sort(trailing.begin(), trailing.end());
-    orderedTypes.append(trailing);
+    std::sort(entries.begin(), entries.end(), [](const TypeEntry& a, const TypeEntry& b) {
+        if (a.categoryOrder != b.categoryOrder) {
+            return a.categoryOrder < b.categoryOrder;
+        }
+        if (a.displayOrder != b.displayOrder) {
+            return a.displayOrder < b.displayOrder;
+        }
+        return a.type < b.type;
+    });
 
     QVariantList out;
-    for (const QString& typeStr : orderedTypes) {
+    for (const TypeEntry& e : entries) {
         QVariantMap entry;
-        entry[QStringLiteral("value")] = typeStr;
-        entry[QStringLiteral("label")] = actionTypeLabelImpl(typeStr);
-        entry[QStringLiteral("params")] = paramsForActionTypeImpl(typeStr);
-        const PickerCategory acat = actionCategory(typeStr);
-        entry[QStringLiteral("category")] = acat.label;
-        entry[QStringLiteral("categoryOrder")] = acat.order;
-        // Domain wire string drives the action row's incompatibility warning —
-        // the QML side flags a context-domain action as never-firing when the
-        // match references window-property fields (ActionRow's
-        // `_currentTypeIncompatible` chip + the sheet's InlineMessage). Looked
-        // up via a probe RuleAction so the descriptor's own `domain` field
-        // stays the single source of truth.
+        entry[QStringLiteral("value")] = e.type;
+        entry[QStringLiteral("label")] = actionTypeLabelImpl(e.type);
+        entry[QStringLiteral("params")] = paramsForActionTypeImpl(e.type);
+        entry[QStringLiteral("category")] = e.categoryLabel;
+        entry[QStringLiteral("categoryOrder")] = e.categoryOrder;
         RuleAction probe;
-        probe.type = typeStr;
+        probe.type = e.type;
         const auto domain = registry.domainFor(probe);
         entry[QStringLiteral("domain")] =
-            domain == PhosphorWindowRule::ActionDomain::Context ? QStringLiteral("context") : QStringLiteral("window");
+            domain == PhosphorWindowRules::ActionDomain::Context ? QStringLiteral("context") : QStringLiteral("window");
         out.append(entry);
     }
     return out;
@@ -752,6 +844,11 @@ QVariantMap defaultPayloadFor(const QString& typeWire)
             // SetBorderColor validator before the user opens the picker.
             // Neutral KDE accent blue, fully opaque.
             payload[key] = QStringLiteral("#FF3DAEE9");
+        } else if (kind == QLatin1String("zoneOrdinals")) {
+            // Seed a valid single-zone default ([1]) so a fresh SnapToZone rule
+            // passes the validator (non-empty array of positive ordinals) before
+            // the user edits the zone list.
+            payload[key] = QVariantList{1};
         } else {
             // Picker kinds (snappingLayout, tilingAlgorithm, animationEvent,
             // shaderEffect, curveEditor) and plain strings all start empty —

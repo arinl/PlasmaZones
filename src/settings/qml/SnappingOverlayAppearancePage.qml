@@ -40,6 +40,7 @@ SettingsFlickable {
 
                 anchors.fill: parent
                 headerText: i18n("Colors")
+                searchAnchor: "colors"
                 collapsible: true
 
                 contentItem: ColumnLayout {
@@ -47,6 +48,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("System accent color")
+                        searchAnchor: "systemAccentColor"
                         description: i18n("Use your desktop color scheme for zone colors")
 
                         SettingsSwitch {
@@ -65,6 +67,7 @@ SettingsFlickable {
                     SettingsRow {
                         visible: !useSystemColorsSwitch.checked
                         title: i18n("Highlight color")
+                        searchAnchor: "highlightColor"
                         description: i18n("Color for the active/hovered zone")
 
                         ColorSwatchRow {
@@ -83,6 +86,7 @@ SettingsFlickable {
                     SettingsRow {
                         visible: !useSystemColorsSwitch.checked
                         title: i18n("Inactive color")
+                        searchAnchor: "inactiveColor"
                         description: i18n("Color for zones that are not hovered")
 
                         ColorSwatchRow {
@@ -101,6 +105,7 @@ SettingsFlickable {
                     SettingsRow {
                         visible: !useSystemColorsSwitch.checked
                         title: i18n("Border color")
+                        searchAnchor: "borderColor"
                         description: i18n("Color for zone borders")
 
                         ColorSwatchRow {
@@ -119,6 +124,7 @@ SettingsFlickable {
                     SettingsRow {
                         visible: !useSystemColorsSwitch.checked
                         title: i18n("Import colors")
+                        searchAnchor: "importColors"
                         description: i18n("Load a color scheme from pywal or a JSON file")
 
                         RowLayout {
@@ -142,6 +148,8 @@ SettingsFlickable {
                         id: colorImportMessage
 
                         Layout.fillWidth: true
+                        Layout.leftMargin: Kirigami.Units.largeSpacing
+                        Layout.rightMargin: Kirigami.Units.largeSpacing
                         visible: false
                         type: Kirigami.MessageType.Positive
                         Accessible.name: text
@@ -169,6 +177,7 @@ SettingsFlickable {
 
                 anchors.fill: parent
                 headerText: i18n("Opacity")
+                searchAnchor: "opacity"
                 collapsible: true
 
                 contentItem: ColumnLayout {
@@ -176,6 +185,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Active opacity")
+                        searchAnchor: "activeOpacity"
                         description: i18n("Opacity of the zone under the cursor")
 
                         SettingsSlider {
@@ -192,6 +202,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Inactive opacity")
+                        searchAnchor: "inactiveOpacity"
                         description: i18n("Opacity of zones not under the cursor")
 
                         SettingsSlider {
@@ -219,6 +230,7 @@ SettingsFlickable {
 
                 anchors.fill: parent
                 headerText: i18n("Border")
+                searchAnchor: "border"
                 collapsible: true
 
                 contentItem: ColumnLayout {
@@ -226,6 +238,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Border width")
+                        searchAnchor: "borderWidth"
                         description: i18n("Thickness of zone borders in pixels")
 
                         SettingsSpinBox {
@@ -242,6 +255,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Border radius")
+                        searchAnchor: "borderRadius"
                         description: i18n("Corner rounding of zone borders in pixels")
 
                         SettingsSpinBox {
@@ -269,6 +283,7 @@ SettingsFlickable {
 
                 anchors.fill: parent
                 headerText: i18n("Zone Labels")
+                searchAnchor: "zoneLabels"
                 collapsible: true
 
                 contentItem: ColumnLayout {
@@ -277,6 +292,7 @@ SettingsFlickable {
                     SettingsRow {
                         visible: !useSystemColorsSwitch.checked
                         title: i18n("Label color")
+                        searchAnchor: "labelColor"
                         description: i18n("Text color for zone labels")
 
                         ColorSwatchRow {
@@ -294,6 +310,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Font")
+                        searchAnchor: "font"
                         description: i18n("Typeface and style for zone labels")
 
                         RowLayout {
@@ -335,6 +352,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Label scale")
+                        searchAnchor: "labelScale"
                         description: i18n("Size multiplier for zone label text")
 
                         SettingsSlider {
@@ -363,6 +381,7 @@ SettingsFlickable {
 
                 anchors.fill: parent
                 headerText: i18n("Effects")
+                searchAnchor: "effects"
                 collapsible: true
 
                 contentItem: ColumnLayout {
@@ -370,6 +389,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Blur behind zones")
+                        searchAnchor: "blurBehindZones"
                         description: i18n("Apply a blur effect to the area behind zone overlays")
 
                         SettingsSwitch {
@@ -385,6 +405,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Zone numbers")
+                        searchAnchor: "zoneNumbers"
                         description: i18n("Display a number label inside each zone")
 
                         SettingsSwitch {
@@ -400,6 +421,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Flash on layout switch")
+                        searchAnchor: "flashOnLayoutSwitch"
                         description: i18n("Briefly flash zones when switching between layouts")
 
                         SettingsSwitch {
@@ -426,6 +448,7 @@ SettingsFlickable {
 
                 anchors.fill: parent
                 headerText: i18n("Shader Effects")
+                searchAnchor: "shaderEffects"
                 showToggle: true
                 toggleChecked: appSettings.enableShaderEffects
                 collapsible: true
@@ -438,6 +461,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Frame rate")
+                        searchAnchor: "frameRate"
                         description: i18n("Target refresh rate for shader animations")
 
                         SettingsSlider {
@@ -456,6 +480,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Audio spectrum")
+                        searchAnchor: "audioSpectrum"
                         description: root.effectsBridge.cavaAvailable ? i18n("Feed audio spectrum data to shaders that support it") : i18n("CAVA is not installed. Install cava to enable audio visualization.")
 
                         SettingsSwitch {
@@ -472,6 +497,8 @@ SettingsFlickable {
 
                     Kirigami.InlineMessage {
                         Layout.fillWidth: true
+                        Layout.leftMargin: Kirigami.Units.largeSpacing
+                        Layout.rightMargin: Kirigami.Units.largeSpacing
                         type: Kirigami.MessageType.Warning
                         text: i18n("CAVA is not installed. Install the <b>cava</b> package to enable audio-reactive shader effects.")
                         visible: !root.effectsBridge.cavaAvailable && shaderCard.toggleChecked
@@ -481,6 +508,7 @@ SettingsFlickable {
 
                     SettingsRow {
                         title: i18n("Spectrum bars")
+                        searchAnchor: "spectrumBars"
                         description: i18n("Number of frequency bands in the audio visualization")
                         enabled: audioVizSwitch.checked && root.effectsBridge.cavaAvailable
 

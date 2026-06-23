@@ -100,7 +100,7 @@ void OverlayService::showZoneSelector(const QString& targetScreenId)
                 continue;
             }
             if (isContextDisabled(m_settings, PhosphorZones::AssignmentEntry::Snapping, screenId,
-                                  m_currentVirtualDesktop, m_currentActivity)) {
+                                  currentVirtualDesktopForScreen(screenId), m_currentActivity)) {
                 continue;
             }
             if (m_excludedScreens.contains(screenId)) {
@@ -117,7 +117,7 @@ void OverlayService::showZoneSelector(const QString& targetScreenId)
             }
             QString screenId = PhosphorScreens::ScreenIdentity::identifierFor(screen);
             if (isContextDisabled(m_settings, PhosphorZones::AssignmentEntry::Snapping, screenId,
-                                  m_currentVirtualDesktop, m_currentActivity)) {
+                                  currentVirtualDesktopForScreen(screenId), m_currentActivity)) {
                 continue;
             }
             if (m_excludedScreens.contains(screenId)) {
@@ -368,7 +368,7 @@ void OverlayService::updateSelectorPosition(int cursorX, int cursorY)
                 // Skip non-active layouts when screen is locked — a LockContext
                 // rule (checked first) or a manual lock on either mode.
                 if (m_settings && m_layoutManager) {
-                    int curDesktop = m_layoutManager->currentVirtualDesktop();
+                    int curDesktop = currentVirtualDesktopForScreen(cursorScreenId);
                     QString curActivity = m_layoutManager->currentActivity();
                     bool locked = isAnyModeLocked(m_settings, m_layoutManager, cursorScreenId, curDesktop, curActivity);
                     if (locked) {
@@ -478,7 +478,10 @@ void OverlayService::createZoneSelectorWindow(const QString& screenId, QScreen* 
     writeQmlProperty(slot, QStringLiteral("screenAspectRatio"), aspectRatio);
     writeQmlProperty(slot, QStringLiteral("screenWidth"), screenGeom.width());
     if (m_settings) {
-        writeQmlProperty(slot, QStringLiteral("zonePadding"), m_settings->zonePadding());
+        // Zone padding honors per-screen overrides (per-screen → global →
+        // default); border width/radius are global-only (no per-screen key).
+        writeQmlProperty(slot, QStringLiteral("zonePadding"),
+                         GeometryUtils::getEffectiveZonePadding(nullptr, m_settings, screenId));
         writeQmlProperty(slot, QStringLiteral("zoneBorderWidth"), m_settings->borderWidth());
         writeQmlProperty(slot, QStringLiteral("zoneBorderRadius"), m_settings->borderRadius());
     }

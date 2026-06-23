@@ -11,7 +11,7 @@
 #include <PhosphorEngine/PlacementEngineBase.h>
 #include <PhosphorProtocol/NavigationTypes.h>
 #include <PhosphorProtocol/WindowTypes.h>
-#include <PhosphorWindowRule/RuleEvaluator.h>
+#include <PhosphorWindowRules/RuleEvaluator.h>
 #include <QObject>
 #include <QPointer>
 #include <QRect>
@@ -24,9 +24,10 @@
 namespace PhosphorZones {
 class IZoneDetector;
 class LayoutRegistry;
+class Layout;
 }
 
-// PhosphorWindowRule::RuleEvaluator is included as a member type of
+// PhosphorWindowRules::RuleEvaluator is included as a member type of
 // std::optional below (needs a complete type at declaration); WindowRuleSet
 // is referenced only by pointer / reference, so a forward declaration would
 // suffice — but including RuleEvaluator.h pulls in WindowRuleSet.h
@@ -76,7 +77,32 @@ public:
     /// wants the engine's own view (e.g. for a per-engine OSD) doesn't
     /// have to wire its own VDM.
     int currentVirtualDesktop() const;
+    /// This screen's current virtual desktop (Plasma 6.7 per-output virtual
+    /// desktops, #648), falling back to the global currentVirtualDesktop().
+    int currentVirtualDesktopForScreen(const QString& screenId) const;
     QString currentActivity() const;
+
+    /// Resolve the zone on @p screenId's @p targetDesktop layout that is
+    /// positionally equivalent to @p currentZoneId (1-based index of zones sorted
+    /// by number), plus its pixel geometry. Returns an empty pair when the target
+    /// desktop has no layout, no matching slot, or invalid geometry. Public (like
+    /// the desktop/activity accessors) so cross-surface handoff logic and tests
+    /// can map a window's slot onto another desktop's layout.
+    std::pair<QString, QRect> resolveCrossDesktopZone(const QString& currentZoneId, const QString& screenId,
+                                                      int targetDesktop) const;
+
+    /// The zone a window ENTERS when it crosses onto @p neighbourScreen moving in
+    /// @p direction: the first zone on the edge facing back toward the source
+    /// (crossing "right" enters the neighbour's left-edge zone). Empty when no
+    /// zone-adjacency resolver is wired or the neighbour has no such zone. Used by
+    /// the daemon cross-mode handoff to place a window arriving on a snap monitor.
+    QString entryZoneForCrossing(const QString& direction, const QString& neighbourScreen) const;
+
+    /// The window snapped to @p zoneId on @p screenId (the daemon's stored
+    /// assignment pins it to that output), or empty if the zone is unoccupied
+    /// there. Used by the cross-mode swap to find the snap partner when THIS
+    /// engine is the swap target.
+    QString windowInZoneOnScreen(const QString& zoneId, const QString& screenId) const;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // IPlacementEngine — lifecycle
@@ -174,6 +200,44 @@ public:
         m_restorePositionPredicate = std::move(predicate);
     }
 
+    /**
+     * @brief Predicate deciding whether an opening window should start FLOATING
+     *        because a "Float this app" window rule matched it. Daemon-injected,
+     *        keyed by the live windowId, evaluated on the window-open path. When
+     *        UNSET (default) no window is rule-floated and the engine keeps its
+     *        historical open behaviour (path unit tests rely on this). Same
+     *        lifetime contract as setRestorePositionPredicate — clear with `{}`
+     *        before destroying any state the closure captured.
+     */
+    using FloatPredicate = std::function<bool(const QString& windowId)>;
+
+    void setFloatPredicate(FloatPredicate predicate)
+    {
+        m_floatPredicate = std::move(predicate);
+    }
+
+    /**
+     * @brief Resolver yielding the 1-based zone ordinals an opening window should
+     *        snap into because a `SnapToZone` window rule matched it. Daemon-
+     *        injected, keyed by the live windowId plus the screen the window is
+     *        opening on (so a rule carrying a `ScreenId` constraint resolves
+     *        against the window's current screen), evaluated on the window-open
+     *        path (`calculateSnapToPlacementRule`, the highest-priority restore
+     *        chain level). Returns an empty list when no rule matches. Multiple
+     *        ordinals request a zone span (their unioned bounding rect). The
+     *        engine stays settings/rule-store-agnostic (LGPL boundary) — it only
+     *        asks. When UNSET (default) no window is rule-snapped and the engine
+     *        keeps its historical open behaviour (path unit tests rely on this).
+     *        Same lifetime contract as setFloatPredicate — clear with `{}` before
+     *        destroying any captured state.
+     */
+    using PlacementZonesResolver = std::function<QList<int>(const QString& windowId, const QString& screenId)>;
+
+    void setPlacementZonesResolver(PlacementZonesResolver resolver)
+    {
+        m_placementZonesResolver = std::move(resolver);
+    }
+
     void windowClosed(const QString& windowId) override;
     void windowFocused(const QString& windowId, const QString& screenId) override;
     void toggleWindowFloat(const QString& windowId, const QString& screenId) override;
@@ -269,12 +333,14 @@ public:
     /**
      * @brief Resolve auto-snap for a newly opened window
      *
-     * First consults the unified WindowPlacementStore: a snapped or floated
-     * record reopens the window from its stored placement (cross-screen where the
-     * predicates allow). If no stored record applies, runs the fallback chain:
-     *   1. App rules (highest priority)
-     *   2. Auto-assign to empty zone
-     *   3. Snap to last zone (final fallback)
+     * A matched SnapToZone placement rule has highest priority and overrides any
+     * stored placement (the store still re-binds the record first, so the window's
+     * float-back geometry survives the override). Otherwise the unified
+     * WindowPlacementStore reopens the window from its snapped or floated record
+     * (cross-screen where the predicates allow). With neither, the fallback chain
+     * runs:
+     *   1. Auto-assign to empty zone
+     *   2. Snap to last zone (final fallback)
      *
      * Returns a PhosphorEngine::SnapResult so the D-Bus adaptor can unpack geometry for the
      * KWin effect. Also handles floating windows (skips snap, emits feedback).
@@ -324,6 +390,11 @@ public:
      * @param resolver Non-owning pointer; must outlive SnapEngine.
      */
     void setZoneAdjacencyResolver(IZoneAdjacencyResolver* resolver);
+
+    /// Inject the cross-surface resolver (neighbour output / desktop lookup),
+    /// threaded into the navigation target resolver so a no-adjacent-zone
+    /// boundary crosses into the neighbouring output instead of failing.
+    void setCrossSurfaceResolver(PhosphorEngine::ICrossSurfaceResolver* resolver) override;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Navigation state provider
@@ -447,8 +518,8 @@ public:
     // Auto-snap calculations (moved from WTS)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    PhosphorEngine::SnapResult calculateSnapToAppRule(const QString& windowId, const QString& windowScreenName,
-                                                      bool isSticky) const;
+    PhosphorEngine::SnapResult calculateSnapToPlacementRule(const QString& windowId, const QString& windowScreenName,
+                                                            bool isSticky) const;
     PhosphorEngine::SnapResult calculateSnapToLastZone(const QString& windowId, const QString& windowScreenId,
                                                        bool isSticky) const;
     PhosphorEngine::SnapResult calculateSnapToEmptyZone(const QString& windowId, const QString& windowScreenId,
@@ -553,7 +624,7 @@ public:
     /// declaration in `Q_SIGNALS:` as a signal and generates a stub body
     /// for it, so placing this setter inside that section makes the
     /// translation unit redefine the function and the link fails.
-    void setExcludeRuleSet(const PhosphorWindowRule::WindowRuleSet* ruleSet);
+    void setExcludeRuleSet(const PhosphorWindowRules::WindowRuleSet* ruleSet);
 
     /// True if @p appId matches an enabled `Exclude`-action WindowRule
     /// whose match leaf targets the `AppId` field. Public so the unit-
@@ -628,6 +699,7 @@ private:
     QPointer<QObject> m_autotileEngineObj;
     PhosphorEngine::IPlacementEngine* m_autotileEngineTyped = nullptr;
     IZoneAdjacencyResolver* m_zoneAdjacencyResolver = nullptr;
+    PhosphorEngine::ICrossSurfaceResolver* m_crossSurfaceResolver = nullptr;
     // Typed navigation-state provider — replaces the opaque QObject* m_wta
     // back-reference. Provides read-only access to compositor-layer shadows
     // (last-active window, last-active screen, last-cursor screen, frame
@@ -662,6 +734,36 @@ private:
     /// handle the null case themselves).
     SnapNavigationTargetResolver* ensureTargetResolver(const QString& action = QString());
 
+    /// Move @p windowId to the virtual desktop adjacent to the current one in
+    /// @p direction. Re-snaps the window into the EQUIVALENT zone on the target
+    /// desktop's layout (same zone id when the layout is shared, else the
+    /// positionally-equivalent zone), updating SnapState + the placement-store
+    /// record, asking the compositor to relocate the real window
+    /// (windowDesktopMoveRequested) and applying the target zone's geometry so it
+    /// lands snapped rather than floating. Falls back to a bare desktop re-stamp
+    /// when no equivalent zone is resolvable. Used when directional move reaches a
+    /// zone-layout boundary with no neighbour output. Returns false when there is
+    /// no neighbour desktop or the window is not snapped.
+    bool tryCrossDesktopMove(const QString& windowId, const QString& direction, const QString& screenId);
+
+    /// If the neighbour OUTPUT in @p direction is a DIFFERENT mode (autotile),
+    /// defer to the daemon cross-mode handoff and return true: a move
+    /// (@p swap false) emits crossModeMoveRequested so autotile inserts the
+    /// window into its stack; a swap (@p swap true) emits crossModeSwapRequested
+    /// so it trades the window with the neighbour's entry-edge tile. Returns
+    /// false when there is no neighbour output or it is also snap-mode (handled
+    /// by the resolver's entry-zone / cross-output-swap path).
+    bool tryCrossModeOutput(const QString& windowId, const QString& direction, const QString& screenId, bool swap);
+
+    /// Focus a window on the virtual desktop adjacent to the current one in
+    /// @p direction (the entry window on @p screenId there), switching KWin to
+    /// it. Used when directional focus reaches a zone-layout boundary with no
+    /// neighbour output. Returns false when there is no neighbour desktop or no
+    /// window on it. @p focusedWindowId is excluded from the target desktop's
+    /// occupants so an on-all-desktops (sticky) source window can't be picked as
+    /// its own cross-desktop focus target.
+    bool tryCrossDesktopFocus(const QString& focusedWindowId, const QString& direction, const QString& screenId);
+
     /// Check whether the window is excluded from the given navigation
     /// action by a terminal `Exclude` action in the unified WindowRule
     /// store. Emits navigationFeedback(false, action, "excluded", ...)
@@ -685,7 +787,7 @@ private:
     /// must be externally serialised (see RuleEvaluator.h's thread-
     /// safety note). Do not access from another thread without adding
     /// locking.
-    const PhosphorWindowRule::WindowRuleSet* m_excludeRuleSet = nullptr;
+    const PhosphorWindowRules::WindowRuleSet* m_excludeRuleSet = nullptr;
     /// Lazily constructed evaluator bound to @ref m_excludeRuleSet. Reset
     /// in `setExcludeRuleSet` when the pointer changes; the evaluator's
     /// internal prio-sort index and resolve cache key off the bound rule
@@ -694,7 +796,7 @@ private:
     /// a different rule-set pointer needs the explicit reset.
     ///
     /// @note Same daemon-main-thread-only contract as @ref m_excludeRuleSet.
-    mutable std::optional<PhosphorWindowRule::RuleEvaluator> m_excludeEvaluator;
+    mutable std::optional<PhosphorWindowRules::RuleEvaluator> m_excludeEvaluator;
 
     // Persistence delegates (KConfig stays in adaptor layer)
     std::function<void()> m_saveFn;
@@ -717,6 +819,15 @@ private:
     // only on the reopening screen — the historical behaviour unit tests rely on.
     // See RestorePositionPredicate doc above.
     RestorePositionPredicate m_restorePositionPredicate{};
+
+    // Rule-driven open-floating gate. Empty until the daemon wires it; while
+    // empty no window is rule-floated. See FloatPredicate doc above.
+    FloatPredicate m_floatPredicate{};
+
+    // Rule-driven open-placement resolver (SnapToZone). Empty until the daemon
+    // wires it; while empty no window is rule-snapped. See PlacementZonesResolver
+    // doc above.
+    PlacementZonesResolver m_placementZonesResolver{};
 };
 
 } // namespace PhosphorSnapEngine

@@ -26,6 +26,7 @@
 #include <QVector2D>
 #include <QVector4D>
 
+#include <chrono>
 #include <type_traits>
 
 #include "../windowanimator.h"
@@ -34,8 +35,15 @@ namespace PlasmaZones {
 
 using ShaderInternal::shaderClockNowMs;
 
-void PlasmaZonesEffect::prePaintScreen(KWin::ScreenPrePaintData& data, std::chrono::milliseconds presentTime)
+void PlasmaZonesEffect::prePaintScreen(KWin::ScreenPrePaintData& data)
 {
+    // KWin 6.7 no longer passes a presentTime; sample the steady clock
+    // ourselves. CompositorClock's epoch is steady_clock by contract, so a
+    // current-time sample is the correct (and only available) source — KWin's
+    // own effects likewise read "now" rather than the target present time.
+    const auto presentTime =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch());
+
     // Feed presentTime to the clock for THIS output so animations
     // bound to other outputs' clocks read stale `now` on their
     // AnimatedValue::advance() calls this tick and step with dt=0
@@ -120,7 +128,7 @@ void PlasmaZonesEffect::prePaintScreen(KWin::ScreenPrePaintData& data, std::chro
     const qint64 frameClockMs = ShaderInternal::shaderClockNowMs();
     m_shaderManager.setCurrentFrameClockMs(frameClockMs);
 
-    KWin::effects->prePaintScreen(data, presentTime);
+    KWin::effects->prePaintScreen(data);
 }
 
 void PlasmaZonesEffect::postPaintScreen()
@@ -262,8 +270,7 @@ void PlasmaZonesEffect::postPaintScreen()
     m_shaderManager.clearFrameOpacityCache();
 }
 
-void PlasmaZonesEffect::prePaintWindow(KWin::RenderView* view, KWin::EffectWindow* w, KWin::WindowPrePaintData& data,
-                                       std::chrono::milliseconds presentTime)
+void PlasmaZonesEffect::prePaintWindow(KWin::RenderView* view, KWin::EffectWindow* w, KWin::WindowPrePaintData& data)
 {
     const bool transformDriven =
         w && (m_windowAnimator->hasAnimation(w) || m_shaderManager.hasTransition(w) || m_restoreSuppress.contains(w));
@@ -311,8 +318,7 @@ void PlasmaZonesEffect::prePaintWindow(KWin::RenderView* view, KWin::EffectWindo
     if (w && m_shaderManager.hasOpacityRules()) {
         const QString winClass = w->windowClass();
         if (!isOwnOverlayClass(winClass) && !isPlasmaShellSurface(winClass)) {
-            const auto opacity = resolveWindowOpacity(m_shaderManager.animationRuleEvaluator(),
-                                                      windowRuleQueryFor(w, getWindowScreenId(w)), getWindowId(w));
+            const auto opacity = resolveWindowOpacity(resolveWindowRuleActions(w, getWindowId(w)));
             m_shaderManager.cacheFrameOpacity(w, opacity);
             // Clear the deviceOpaque region so KWin recomposites whatever
             // sits behind a dimmed window — without it, stale background
@@ -346,7 +352,7 @@ void PlasmaZonesEffect::prePaintWindow(KWin::RenderView* view, KWin::EffectWindo
         }
     }
 
-    OffscreenEffect::prePaintWindow(view, w, data, presentTime);
+    OffscreenEffect::prePaintWindow(view, w, data);
 }
 
 void PlasmaZonesEffect::paintWindow(const KWin::RenderTarget& renderTarget, const KWin::RenderViewport& viewport,
@@ -449,8 +455,7 @@ void PlasmaZonesEffect::paintWindow(const KWin::RenderTarget& renderTarget, cons
             if (m_shaderManager.frameOpacityCached(w)) {
                 opacity = m_shaderManager.cachedFrameOpacity(w);
             } else {
-                opacity = resolveWindowOpacity(m_shaderManager.animationRuleEvaluator(),
-                                               windowRuleQueryFor(w, getWindowScreenId(w)), getWindowId(w));
+                opacity = resolveWindowOpacity(resolveWindowRuleActions(w, getWindowId(w)));
                 m_shaderManager.cacheFrameOpacity(w, opacity);
             }
             if (opacity) {
@@ -510,7 +515,7 @@ void PlasmaZonesEffect::paintWindow(const KWin::RenderTarget& renderTarget, cons
         // ShaderTransition's docstring). Lifecycle events (window.*)
         // started via tryBeginShaderForEvent set durationMs > 0 and drive
         // progress from monotonic steady-clock elapsed; zone.* events flowed
-        // through applySnapGeometry leave durationMs = 0 and ride the
+        // through applyWindowGeometry leave durationMs = 0 and ride the
         // m_windowAnimator timeline so the shader matches the geometry
         // animation.
         qreal progress = 0.0;
@@ -1276,6 +1281,62 @@ void PlasmaZonesEffect::apply(KWin::EffectWindow* window, int mask, KWin::Window
         qLeft = qMin(qLeft, quads[i].left());
         qTop = qMin(qTop, quads[i].top());
     }
+
+    // Window-relative grid deformation (e.g. the `flow` window-move
+    // effect). Build an NxN grid over the window's DESTINATION frame rect
+    // — the same rect pushed as iToRect — so the vertex shader can pull
+    // trailing rows back toward iFromRect while the leading edge settles
+    // first. Anchoring the grid to the window (not the output, as the
+    // single-quad path below does) keeps the deformation resolution
+    // constant regardless of how small a zone the window snaps into: every
+    // cell lands on the window. Texcoords are emitted as plain card uv
+    // (0..1, row 0 at the window's top); KWin Y-flips window-quad
+    // texcoords on upload, so the flow vertex stage re-applies the
+    // canonical `1.0 - texCoord.y` flip (same as the shared kwin vertex
+    // stage) to recover card uv with y = 0 at the top. Displaced trailing
+    // vertices reach past the destination rect toward iFromRect;
+    // surface-extent draws with Region::infinite (see paintWindow), so
+    // they are not clipped.
+    if (st->gridSubdivisions > 0) {
+        // Destination frame rect == iToRect. The window already jumped
+        // there via moveResize, so the live frameGeometry is a safe
+        // fallback if a transition somehow lacks a recorded destination.
+        QRectF dst = st->toGeometry;
+        if (!dst.isValid() || dst.isEmpty()) {
+            dst = window->frameGeometry();
+        }
+        if (dst.isEmpty()) {
+            return;
+        }
+        // quad-space <-> screen-space is a pure translation at 1:1 logical
+        // scale; qLeft/qTop is the captured texture's top-left in quad
+        // space and textureGeo its top-left in screen space.
+        const double qOffX = qLeft - textureGeo.x();
+        const double qOffY = qTop - textureGeo.y();
+        const int n = st->gridSubdivisions;
+        quads.clear();
+        quads.reserve(n * n);
+        for (int gy = 0; gy < n; ++gy) {
+            const double v0 = static_cast<double>(gy) / n;
+            const double v1 = static_cast<double>(gy + 1) / n;
+            const double y0 = dst.y() + v0 * dst.height() + qOffY;
+            const double y1 = dst.y() + v1 * dst.height() + qOffY;
+            for (int gx = 0; gx < n; ++gx) {
+                const double u0 = static_cast<double>(gx) / n;
+                const double u1 = static_cast<double>(gx + 1) / n;
+                const double x0 = dst.x() + u0 * dst.width() + qOffX;
+                const double x1 = dst.x() + u1 * dst.width() + qOffX;
+                KWin::WindowQuad cell;
+                cell[0] = KWin::WindowVertex(x0, y0, u0, v0);
+                cell[1] = KWin::WindowVertex(x1, y0, u1, v0);
+                cell[2] = KWin::WindowVertex(x1, y1, u1, v1);
+                cell[3] = KWin::WindowVertex(x0, y1, u0, v1);
+                quads.append(cell);
+            }
+        }
+        return;
+    }
+
     const double ox = qLeft + (outputGeo.x() - textureGeo.x());
     const double oy = qTop + (outputGeo.y() - textureGeo.y());
     const double ow = outputGeo.width();

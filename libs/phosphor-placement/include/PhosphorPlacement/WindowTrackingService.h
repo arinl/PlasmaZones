@@ -310,6 +310,18 @@ public:
      */
     QStringList zonesForWindow(const QString& windowId) const override;
 
+    /// The screen a window is assigned to, or empty when it has none. Point
+    /// accessor over the screen-assignment map that canonicalizes @p windowId to
+    /// the first-seen composite (via SnapState), so external callers resolve a
+    /// window even after the effect-restart-after-class-mutation skew rather than
+    /// reading the raw whole-map getter with a stale composite (issue #628).
+    QString screenForWindow(const QString& windowId) const override;
+
+    /// Same, but returns @p defaultScreen when the window has no screen
+    /// assignment — the canonicalizing replacement for
+    /// `screenAssignments().value(windowId, defaultScreen)`.
+    QString screenForWindow(const QString& windowId, const QString& defaultScreen) const override;
+
     /**
      * @brief Get all windows in a specific zone
      * @param zoneId PhosphorZones::Zone UUID string
@@ -371,6 +383,17 @@ public:
     /// single float-back store). See IWindowTrackingService::recordFreeGeometry.
     void recordFreeGeometry(const QString& windowId, const QString& screenId, const QRect& geometry,
                             bool overwrite) override;
+
+    /// Authoritative float-back capture for a window closing on @p screenId.
+    /// Unlike recordFreeGeometry (a geometry-only partial that deliberately leaves
+    /// the managed-context screen untouched), this records the float geometry AND
+    /// updates the record's managed `screenId` to @p screenId — carrying an engine
+    /// slot so the store merge adopts the new screen. Used by the close-capture
+    /// fallback when a cross-screen move has orphaned the window from both engines,
+    /// so the only authoritative source of its final screen is KWin (passed down
+    /// from the effect). The existing record's per-engine slots and desktop/activity
+    /// are preserved; only the screen and this screen's free geometry change.
+    void recordFloatingClose(const QString& windowId, const QString& screenId, const QRect& geometry);
 
     /// Clear a window's shared free/float geometry from the record. See
     /// IWindowTrackingService::clearFreeGeometry.

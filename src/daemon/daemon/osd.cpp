@@ -239,12 +239,31 @@ void Daemon::showContextDisabledOsd(const QString& screenId, int desktop, const 
     qCInfo(lcDaemon) << "Showing disabled text OSD:" << reasonText << "screen=" << screenId;
 }
 
+void Daemon::showNotAssignedOsd(const QString& screenId)
+{
+    if (shouldSuppressOsd()) {
+        return;
+    }
+    const OsdStyle style = m_settings ? m_settings->osdStyle() : OsdStyle::Preview;
+    if (style == OsdStyle::None) {
+        return;
+    }
+    const QString text = PhosphorI18n::tr("No layout assigned");
+    if (style == OsdStyle::Preview && m_overlayService) {
+        m_overlayService->showDisabledOsd(text, screenId);
+        qCInfo(lcDaemon) << "Showing not-assigned preview OSD: screen=" << screenId;
+        return;
+    }
+    showKdeTextOsd(QStringLiteral("dialog-information"), text);
+    qCInfo(lcDaemon) << "Showing not-assigned text OSD: screen=" << screenId;
+}
+
 void Daemon::showLayoutOsdForAlgorithm(const QString& algorithmId, const QString& displayName, const QString& screenId)
 {
     if (shouldSuppressOsd()) {
         return;
     }
-    auto* algo = m_algorithmRegistry.get()->algorithm(algorithmId);
+    auto* algo = m_algorithmRegistry ? m_algorithmRegistry->algorithm(algorithmId) : nullptr;
     if (!algo) {
         qCWarning(lcDaemon) << "OSD: algorithm not found, algorithmId=" << algorithmId;
         return;
@@ -367,7 +386,7 @@ void Daemon::updateLayoutFilterForScreen(const QString& focusedScreenId)
     bool manualActive = false;
 
     if (m_settings->autotileEnabled() && m_layoutManager && m_screenManager) {
-        const int desktop = currentDesktop();
+        const int desktop = currentDesktopForScreen(focusedScreenId);
         const QString activity = currentActivity();
 
         if (!focusedScreenId.isEmpty()) {
@@ -413,7 +432,6 @@ void Daemon::syncModeFromAssignments()
         return;
     }
 
-    const int desktop = currentDesktop();
     const QString activity = currentActivity();
 
     // Sync UnifiedLayoutController's current layout ID to match this desktop.
@@ -433,6 +451,8 @@ void Daemon::syncModeFromAssignments()
                 }
             }
         }
+        // Per-output virtual desktops (#648): each screen resolves its own desktop.
+        const int desktop = currentDesktopForScreen(focusedScreenId);
         if (!focusedScreenId.isEmpty()) {
             const QString focusedAssignmentId =
                 m_layoutManager->assignmentIdForScreen(focusedScreenId, desktop, activity);
@@ -470,7 +490,7 @@ void Daemon::syncModeFromAssignments()
     updateLayoutFilter();
 }
 
-void Daemon::showDesktopSwitchOsd(int desktop, const QString& activity)
+void Daemon::showDesktopSwitchOsd(const QString& activity)
 {
     // Skip during startup — the initial activity/desktop detection fires
     // before start() completes and should not produce an OSD flash.
@@ -484,10 +504,35 @@ void Daemon::showDesktopSwitchOsd(int desktop, const QString& activity)
         || !m_screenManager) {
         return;
     }
-    showOsdForAllScreens(desktop, activity);
+    showOsdForAllScreens(activity);
 }
 
-void Daemon::showOsdForAllScreens(int desktop, const QString& activity)
+void Daemon::showDesktopSwitchOsdForScreen(const QString& screenId, const QString& activity)
+{
+    // Per-output virtual desktops (#648): only the screen that actually switched
+    // shows the OSD, not every monitor. Same gating as the all-screens variant.
+    if (!m_running) {
+        return;
+    }
+    if (shouldSuppressOsd()) {
+        return;
+    }
+    if (!m_settings || !m_settings->showOsdOnDesktopSwitch() || !m_overlayService || !m_layoutManager
+        || !m_screenManager) {
+        return;
+    }
+    showOsdForScreens({screenId}, activity);
+}
+
+void Daemon::showOsdForAllScreens(const QString& activity)
+{
+    if (!m_screenManager) {
+        return;
+    }
+    showOsdForScreens(m_screenManager->effectiveScreenIds(), activity);
+}
+
+void Daemon::showOsdForScreens(const QStringList& screenIds, const QString& activity)
 {
     if (!m_layoutManager || !m_screenManager) {
         return;
@@ -498,15 +543,18 @@ void Daemon::showOsdForAllScreens(int desktop, const QString& activity)
     // Batch all per-screen OSD shows into one deferred call so every
     // screen's surface->show() fires in the same event loop pass and the
     // compositor renders them simultaneously.
-    QTimer::singleShot(0, this, [this, desktop, activity]() {
+    QTimer::singleShot(0, this, [this, screenIds, activity]() {
         if (!m_layoutManager || !m_screenManager) {
             return;
         }
         if (shouldSuppressOsd()) {
             return;
         }
-        const QStringList effectiveIds = m_screenManager->effectiveScreenIds();
-        for (const QString& screenId : effectiveIds) {
+        for (const QString& screenId : screenIds) {
+            // Each screen reports against its OWN current virtual desktop
+            // (Plasma 6.7 per-output virtual desktops, #648).
+            const int desktop =
+                m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktopForScreen(screenId) : currentDesktop();
             // Route the disabled-context probe through the resolver so this
             // OSD pass uses the same single snapshot façade as every other
             // call site — the prior hand-stitched (modeFor → settings →
@@ -544,10 +592,28 @@ void Daemon::showOsdForAllScreens(int desktop, const QString& activity)
                 showContextDisabledOsd(screenId, desktop, activity, why);
                 continue;
             }
+            // No active layout for this context because the default assignment is
+            // suppressed (global setting or per-context rule) — show a "not
+            // assigned" OSD instead of the global default layout / algorithm the
+            // fallback would otherwise surface for an unassigned screen.
+            if (m_layoutManager->isContextActiveLayoutSuppressed(screenId, desktop, activity)) {
+                showNotAssignedOsd(screenId);
+                continue;
+            }
             const QString assignmentId = m_layoutManager->assignmentIdForScreen(screenId, desktop, activity);
             if (PhosphorLayout::LayoutId::isAutotile(assignmentId)) {
                 const QString algoId = PhosphorLayout::LayoutId::extractAlgorithmId(assignmentId);
-                auto* algo = m_algorithmRegistry->algorithm(algoId);
+                // Bare autotile (mode set, no concrete algorithm) draws its
+                // algorithm from the suppressed global default, so it won't tile
+                // (see updateAutotileScreens) — show "not assigned" rather than
+                // announcing the default algorithm. A concrete assigned algorithm
+                // always shows.
+                if (algoId.isEmpty()
+                    && m_layoutManager->isDefaultAssignmentSuppressedForContext(screenId, desktop, activity)) {
+                    showNotAssignedOsd(screenId);
+                    continue;
+                }
+                auto* algo = m_algorithmRegistry ? m_algorithmRegistry->algorithm(algoId) : nullptr;
                 const QString displayName = algo ? algo->name() : algoId;
                 showLayoutOsdForAlgorithm(algoId, displayName, screenId);
             } else {
@@ -563,6 +629,13 @@ void Daemon::showOsdForAllScreens(int desktop, const QString& activity)
 int Daemon::currentDesktop() const
 {
     return m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktop() : 0;
+}
+
+int Daemon::currentDesktopForScreen(const QString& screenId) const
+{
+    // Per-output virtual desktops (#648): resolve THIS screen's current desktop,
+    // falling back to the global current when no per-output value is on record.
+    return m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktopForScreen(screenId) : 0;
 }
 
 QString Daemon::currentActivity() const

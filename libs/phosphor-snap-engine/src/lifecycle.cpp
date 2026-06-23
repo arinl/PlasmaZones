@@ -81,11 +81,14 @@ void SnapEngine::windowOpened(const QString& windowId, const QString& screenId, 
 // ═══════════════════════════════════════════════════════════════════════════════
 // resolveWindowRestore — WindowPlacementStore restore + auto-snap fallback chain
 //
-// Consults the unified WindowPlacementStore first (snapped or floated record —
-// snapping's two states); if none applies, runs the fallback chain (1. app rules,
-// 2. empty zone, 3. last zone), and a no-match window defaults to floated.
-// Persisted session restore is now served by the store block above, not a chain
-// level.
+// A matched SnapToZone placement rule has highest priority: it overrides any
+// remembered placement. It is APPLIED inside the WindowPlacementStore block, AFTER
+// the store re-binds the window's record to the live id, so the rule decides WHERE
+// the window snaps while the store still preserves its float-back geometry for a
+// later Meta+F. With no rule, the store restores the snapped or floated record
+// (snapping's two states); with neither, the fallback chain runs (1. empty zone,
+// 2. last zone), and a no-match window defaults to floated. Persisted session
+// restore is served by the store block, not a chain level.
 //
 // Mostly decision logic: returns a SnapResult for the caller to apply geometry.
 // Side effects: consumePendingAssignment; marks floated windows floating
@@ -95,11 +98,15 @@ void SnapEngine::windowOpened(const QString& windowId, const QString& screenId, 
 // geometry application.
 //
 // Screen mode semantics:
-//   - The placement-store restore and app rules (chain level 1) may
-//     cross-screen migrate: a stored record's own screenId or an app rule can
-//     route a window to a different screen, and the store's take() accept
-//     predicate / snapped-branch screen check keep an autotile-mode screen from
-//     being snapped onto (autotile on that screen will own it).
+//   - SNAPPED placement-store restore may cross-screen migrate: a snapped record's
+//     own screenId can route a window to a different screen, and the store's take()
+//     accept predicate / snapped-branch screen check keep an autotile-mode screen
+//     from being snapped onto (autotile on that screen will own it). SnapToZone
+//     placement rules (chain level 1) resolve on the window's CURRENT screen — a
+//     screen constraint is expressed as a ScreenId match on the rule itself, not a
+//     cross-screen move. FLOATED records are screen-local — a float-back is restored
+//     only when the window reopens on its recorded screen, never moved across
+//     monitors (the accept predicate gates floated records on the opening screen).
 //   - The empty-zone (level 2) and last-zone (level 3) fallbacks inherently use
 //     the caller screen as the target, so they are ONLY valid when the caller's
 //     screen is in snap mode. On autotile screens they're short-circuited —
@@ -115,8 +122,8 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
     }
 
     // Global snapping kill-switch. When the user turns snapping off entirely,
-    // no window may be auto-snapped on open — not via app rules, session
-    // restore, empty-zone auto-assign, or last-used-zone. The screen-mode gate
+    // no window may be auto-snapped on open — not via SnapToZone placement rules,
+    // session restore, empty-zone auto-assign, or last-used-zone. The screen-mode gate
     // below only covers autotile-mode screens; a screen still carrying a
     // Snapping-mode layout assignment would otherwise keep auto-snapping new
     // windows even with snapping globally disabled (discussion #461 item 2).
@@ -164,7 +171,7 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
     // record (recorded screen == this autotile screen) is NOT snapping, so the peek
     // misses and we correctly defer, leaving the record for autotile.
     if (m_layoutManager
-        && m_layoutManager->modeForScreen(screenId, currentVirtualDesktop(), currentActivity())
+        && m_layoutManager->modeForScreen(screenId, currentVirtualDesktopForScreen(screenId), currentActivity())
             != PhosphorZones::AssignmentEntry::Mode::Snapping) {
         bool crossScreenSnapRestorePending = false;
         if (m_windowTracker) {
@@ -183,9 +190,23 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
             << "but carries a cross-screen snap restore — not deferring";
     }
 
+    // Highest-priority placement: a matched SnapToZone rule. An explicit "this app
+    // snaps to these zones" directive outranks ANY remembered placement — a floated
+    // position or a prior snap to a different zone. Resolved up front (after the
+    // autotile screen-mode gate, so autotile screens still own their windows) but
+    // APPLIED below, AFTER the placement store has re-bound the window's record: the
+    // rule overrides WHERE the window goes, while the store still preserves the
+    // window's float-back geometry so a later Meta+F returns it to its remembered
+    // free position rather than the zone rect. When the rule's own target context is
+    // disabled, it does NOT win and we fall through to the normal store restore.
+    const SnapResult placementRuleResult = calculateSnapToPlacementRule(windowId, screenId, sticky);
+    const bool placementRuleWins = placementRuleResult.shouldSnap
+        && (!m_shouldRestorePredicate || m_shouldRestorePredicate(placementRuleResult.screenId));
+
     // Unified placement store — the single authoritative restore record for this
-    // window. Consulted FIRST, before the legacy "already has assignment" skip and
-    // the snap/float chains. This ordering is load-bearing: on a daemon-only
+    // window. Consulted before the legacy "already has assignment" skip and the
+    // snap/float chains (but after a matched SnapToZone rule, above). This
+    // ordering is load-bearing: on a daemon-only
     // restart the old WindowZoneAssignmentsFull is still loaded, so a window that
     // was FLOATED (floating keeps its zone assignment) comes back isWindowSnapped()
     // == true and would hit the legacy skip below — never floating. Consulting the
@@ -229,11 +250,9 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
                 // on the wrong monitor, unsnapped. The RECORDED screen must still be
                 // in snapping mode, though: a snapped record whose own screen is now
                 // autotile-owned must not snap-restore there (the early gate leaves it
-                // for autotile). A floated position is screen-local UNLESS the
-                // user opted into unsnapped-position restore (global setting / rule),
-                // in which case the record is eligible cross-screen so the window
-                // returns to its recorded monitor; otherwise it stays gated on the
-                // opening screen.
+                // for autotile). A floated position is ALWAYS screen-local: it is
+                // eligible only when the window opens on its recorded monitor (the
+                // gate below). Float restore never MOVES a window across monitors.
                 if (p.slotFor(engineId()).state == WindowPlacement::stateSnapped()) {
                     return recordedSnapScreenIsSnapping(p);
                 }
@@ -251,9 +270,17 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
                 if (!p.hasRestorableContent()) {
                     return false;
                 }
-                if (restoreFloatedPosition) {
-                    return true;
-                }
+                // A floated record is SCREEN-LOCAL: eligible only when the window
+                // opens on the monitor it was recorded on (or an unscreened record).
+                // Float restore must NEVER move a window to a different monitor —
+                // a stale float record left by an earlier instance on another output
+                // (matched via the appId FIFO, not an exact-windowId match) would
+                // otherwise teleport a freshly-launched window onto a monitor it never
+                // occupied, and the wrong-monitor capture that follows re-cements the
+                // bad record into a self-perpetuating cross-monitor jump. The opening
+                // monitor is owned by KWin's placement / session restore; PlasmaZones
+                // only restores the floated POSITION within that monitor (gated on the
+                // restore-floated opt-in at the geometry-move step below).
                 return p.screenId.isEmpty() || p.screenId == screenId;
             },
             [&](const WindowPlacement& p) {
@@ -293,6 +320,17 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
             const QRect freeGeo = rec->freeGeometryFor(restoreScreen);
             rec->windowId = windowId;
             m_windowTracker->placementStore().record(*rec);
+
+            // The record (and its float-back geometry) is now re-bound to the live
+            // window. A matched SnapToZone rule overrides the remembered placement
+            // here — the window snaps to the rule's zones while its freeGeo survives
+            // in the record for a later Meta+F float.
+            if (placementRuleWins) {
+                qCInfo(PhosphorSnapEngine::lcSnapEngine)
+                    << "resolveWindowRestore: placement rule overrides stored record for" << windowId
+                    << "zones=" << placementRuleResult.zoneIds << "(freeGeo preserved=" << freeGeo << ")";
+                return placementRuleResult;
+            }
 
             if (slot.state == WindowPlacement::stateSnapped()) {
                 // A stored snap is still subject to the disabled-context gate.
@@ -334,7 +372,8 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
                 // That gate refuses to auto-SNAP a window onto a context the user
                 // disabled snapping for; a floated window is not being snapped into a
                 // zone, so restoring its floating state is correct regardless.
-                m_snapState->setFloatingOnScreen(windowId, restoreScreen, currentVirtualDesktop());
+                m_snapState->setFloatingOnScreen(windowId, restoreScreen,
+                                                 currentVirtualDesktopForScreen(restoreScreen));
                 if (!slot.zoneIds.isEmpty()) {
                     // A window floated FROM a snapped state carries its pre-float zones
                     // for the resnap path; a never-snapped floated window has none.
@@ -370,6 +409,15 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
         return SnapResult::noSnap();
     }
 
+    // No stored record matched above, so there is no float-back geometry to
+    // inherit — but a matched SnapToZone rule still wins for a fresh window.
+    if (placementRuleWins) {
+        qCInfo(PhosphorSnapEngine::lcSnapEngine)
+            << "resolveWindowRestore: placement rule matched (no stored record) for" << windowId
+            << "zones=" << placementRuleResult.zoneIds;
+        return placementRuleResult;
+    }
+
     // Disabled-context gate: refuse auto-snap onto a (screen, virtualDesktop,
     // activity) the user has disabled snap for. Catches BOTH windowOpened
     // and the direct D-Bus resolveWindowRestore path the KWin effect uses,
@@ -382,7 +430,7 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
     //
     // Placed AFTER the isWindowSnapped/consume guard so windows that are
     // already snapped still consume their appId pending entry; placed
-    // BEFORE the exclusion lookup and the calculate* chain so app rules,
+    // BEFORE the exclusion lookup and the calculate* chain so placement rules,
     // session restore, empty-zone, and last-zone fallbacks are all gated
     // by the same predicate.
     //
@@ -396,7 +444,7 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
 
     // Exclusion check: skip auto-snap for excluded applications/window classes.
     // This must run before any calculate method so excluded apps are never snapped
-    // by app rules, session restore, empty zone, or last zone features.
+    // by placement rules, session restore, empty zone, or last zone features.
     //
     // Use the WTS's registry-aware lookup so a window whose class the effect
     // has already updated (Electron/CEF apps renaming themselves) matches
@@ -422,25 +470,23 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
         return SnapResult::noSnap();
     }
 
-    // 1. App rules (highest priority). May cross-screen migrate.
-    {
-        SnapResult result = calculateSnapToAppRule(windowId, screenId, sticky);
-        if (result.shouldSnap) {
-            // An app rule may target a screen other than the caller's. The
-            // disabled-context gate above validated only the caller's screenId,
-            // so re-check the predicate against the result's destination
-            // screen. An app rule must not route a window onto a context the
-            // user disabled.
-            if (m_shouldRestorePredicate && !m_shouldRestorePredicate(result.screenId)) {
-                qCDebug(PhosphorSnapEngine::lcSnapEngine) << "resolveWindowRestore:" << windowId << "appRule target"
-                                                          << result.screenId << "rejected by disabled-context gate";
-                return SnapResult::noSnap();
-            }
-            qCInfo(PhosphorSnapEngine::lcSnapEngine)
-                << "resolveWindowRestore: appRule matched for" << windowId << "zone=" << result.zoneId;
-            return result;
-        }
+    // A matched "Float this app" window rule opens the window floating, exactly
+    // as if the user had toggled float. Runs after the exclusion gate (excluded
+    // windows return earlier), the already-floating guard, and the persisted-
+    // placement restore (a window the user previously snapped reopens snapped —
+    // that restore returns before reaching here), but before the auto-snap chain —
+    // so a rule-floated window never auto-snaps to a zone.
+    // Mirrors the no-match default-float terminal at the end of this function.
+    if (m_floatPredicate && m_floatPredicate(windowId)) {
+        m_snapState->setFloatingOnScreen(windowId, screenId, currentVirtualDesktopForScreen(screenId));
+        Q_EMIT windowFloatingChanged(windowId, true, screenId);
+        qCInfo(PhosphorSnapEngine::lcSnapEngine) << "resolveWindowRestore:" << windowId << "floated by rule";
+        return SnapResult::noSnap();
     }
+
+    // (SnapToZone placement rules are resolved BEFORE the placement store, near
+    // the top of this function — an explicit rule outranks any remembered
+    // placement. See the "highest-priority restore" block above.)
 
     // (Persisted session restore is now served entirely by the unified
     // WindowPlacementStore block at the top of this function — a snapped window
@@ -453,7 +499,7 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
     // on an autotile screen must not be auto-assigned, autotile owns
     // placement there.
     if (m_layoutManager) {
-        const int dt = currentVirtualDesktop();
+        const int dt = currentVirtualDesktopForScreen(screenId);
         if (m_layoutManager->modeForScreen(screenId, dt, currentActivity())
             != PhosphorZones::AssignmentEntry::Mode::Snapping) {
             qCDebug(PhosphorSnapEngine::lcSnapEngine) << "resolveWindowRestore:" << windowId << "caller screen"
@@ -490,7 +536,7 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
     // already-snapped guards above all return earlier, and the autotile-caller
     // short-circuit returns before the empty/last-zone chain — so this is always a
     // genuine snap-mode window with no zone match.
-    m_snapState->setFloatingOnScreen(windowId, screenId, currentVirtualDesktop());
+    m_snapState->setFloatingOnScreen(windowId, screenId, currentVirtualDesktopForScreen(screenId));
     Q_EMIT windowFloatingChanged(windowId, true, screenId);
     qCInfo(PhosphorSnapEngine::lcSnapEngine)
         << "resolveWindowRestore:" << windowId << "no snap match — defaulting to floated on" << screenId;
@@ -500,6 +546,13 @@ SnapResult SnapEngine::resolveWindowRestore(const QString& windowId, const QStri
 int SnapEngine::currentVirtualDesktop() const
 {
     return m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktop() : 0;
+}
+
+int SnapEngine::currentVirtualDesktopForScreen(const QString& screenId) const
+{
+    // Per-output virtual desktops (#648): a snapped window's context binds to the
+    // desktop of the screen it lives on, not the global current desktop.
+    return m_virtualDesktopManager ? m_virtualDesktopManager->currentDesktopForScreen(screenId) : 0;
 }
 
 QString SnapEngine::currentActivity() const
@@ -537,10 +590,12 @@ std::optional<PhosphorEngine::WindowPlacement> SnapEngine::capturePlacement(cons
     // engine remembers
     // the window's state in its OWN mode; returning nullopt leaves the snap record
     // untouched.
+    // Resolve the window's own screen once: the mode gate below and the
+    // captured per-output desktop (#648) both key on it.
+    const QString effScreen = screenForTrackedWindow(windowId);
     if (m_layoutManager) {
-        const QString effScreen = screenForTrackedWindow(windowId);
         if (!effScreen.isEmpty()
-            && m_layoutManager->modeForScreen(effScreen, currentVirtualDesktop(), currentActivity())
+            && m_layoutManager->modeForScreen(effScreen, currentVirtualDesktopForScreen(effScreen), currentActivity())
                 != PhosphorZones::AssignmentEntry::Mode::Snapping) {
             return std::nullopt;
         }
@@ -549,7 +604,10 @@ std::optional<PhosphorEngine::WindowPlacement> SnapEngine::capturePlacement(cons
     WindowPlacement p;
     p.windowId = windowId;
     p.appId = m_windowTracker ? m_windowTracker->currentAppIdFor(windowId) : QString();
-    p.virtualDesktop = currentVirtualDesktop();
+    // Bind the captured desktop to the window's OWN screen, not the global current
+    // (Plasma 6.7 per-output virtual desktops, #648), so a float-back restores to
+    // the right desktop on a screen that isn't the active one.
+    p.virtualDesktop = currentVirtualDesktopForScreen(effScreen);
     p.activity = currentActivity();
 
     // The slot carries only the snap engine's STATE + slot reference (zone IDs) —
@@ -568,7 +626,7 @@ std::optional<PhosphorEngine::WindowPlacement> SnapEngine::capturePlacement(cons
     } else if (m_snapState->isWindowSnapped(windowId)) {
         slot.state = WindowPlacement::stateSnapped();
         slot.zoneIds = m_snapState->zonesForWindow(windowId);
-        p.screenId = m_snapState->screenAssignments().value(windowId);
+        p.screenId = m_snapState->screenForWindow(windowId);
     } else {
         // Snapping has only two states — snapped (above) or floated. An unmanaged
         // window on a snap-mode screen is FLOATED (the retired `free` state). The

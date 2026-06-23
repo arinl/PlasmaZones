@@ -40,6 +40,7 @@
 #include "overlayservice.h"
 #include "unifiedlayoutcontroller.h"
 #include "modetracker.h"
+#include "unifiedlayoutcontroller.h"
 #include "shortcutmanager.h"
 #include "rendering/zoneentryscaffold.h"
 #include "rendering/zoneshadernoderhi.h"
@@ -58,6 +59,7 @@
 #include <PhosphorWorkspaces/VirtualDesktopManager.h>
 #include <PhosphorWorkspaces/ActivityManager.h>
 #include "../core/constants.h"
+#include "../core/crosssurfaceresolver.h"
 #include "../core/geometryutils.h"
 #include <PhosphorProtocol/ServiceConstants.h>
 #include "../core/logging.h"
@@ -87,8 +89,8 @@
 #include "../dbus/compositorbridgeadaptor.h"
 #include "../dbus/controladaptor.h"
 #include "../dbus/windowruleadaptor.h"
-#include <PhosphorWindowRule/ExclusionRules.h>
-#include <PhosphorWindowRule/WindowRuleStore.h>
+#include <PhosphorWindowRules/ExclusionRules.h>
+#include <PhosphorWindowRules/WindowRuleStore.h>
 #include "enginefactory.h"
 #include <PhosphorTileEngine/AutotileEngine.h>
 #include <PhosphorTiles/ScriptedAlgorithmLoader.h>
@@ -152,7 +154,7 @@ Daemon::Daemon(QObject* parent)
     // Unified WindowRule store — loads windowrules.json (written by the v3→v4
     // migration). Daemon is the sole writer; the WindowRuleAdaptor exposes it.
     // Declared/constructed before m_layoutManager so the registry can borrow it.
-    , m_windowRuleStore(std::make_unique<PhosphorWindowRule::WindowRuleStore>(ConfigDefaults::windowRulesFilePath()))
+    , m_windowRuleStore(std::make_unique<PhosphorWindowRules::WindowRuleStore>(ConfigDefaults::windowRulesFilePath()))
     , m_layoutManager(std::make_unique<PhosphorZones::LayoutRegistry>(m_windowRuleStore.get(),
                                                                       QStringLiteral("plasmazones/layouts")))
     , m_layoutComputeService(std::make_unique<PhosphorZones::LayoutComputeService>(nullptr))
@@ -877,9 +879,22 @@ bool Daemon::init()
     m_layoutManager->setSnappingPreferredProvider([this]() {
         return m_settings && m_settings->snappingEnabled();
     });
+    // Global "suppress default layout assignment" gate. When on, the level-1
+    // default synthesis above is short-circuited so an unassigned context gets
+    // no active layout (no engine activates) until the user assigns one — the
+    // same effective state as having no default providers configured. The
+    // per-context DefaultLayoutAssignment window rule overrides this either way.
+    m_layoutManager->setDefaultAssignmentSuppressedProvider([this]() {
+        return m_settings && m_settings->suppressDefaultLayoutAssignment();
+    });
     // Wire the compute service to the layout manager so tracked layouts
     // are evicted on removal (bounds m_trackedLayouts over time).
     m_layoutComputeService->setLayoutManager(m_layoutManager.get());
+
+    // Seed the curated default picker visibility on a fresh install (no-op when
+    // a layout-settings.json / autotile-overrides.json already exists), before
+    // loadLayouts() so the seeded hidden state merges onto each layout.
+    m_layoutManager->seedDefaultLayoutSettingsIfFresh(ConfigDefaults::defaultLayoutVisibilitySettings());
 
     // Load layouts (defaultLayout() reads settings internally)
     m_layoutManager->loadLayouts();
@@ -1064,6 +1079,35 @@ bool Daemon::init()
         syncModeFromAssignments();
     });
 
+    // Resnap currently-snapped windows when a snapping gap/padding setting
+    // changes (global or per-screen) so the new spacing is visible immediately
+    // instead of requiring a manual re-snap of each window (discussion #661).
+    // The signals below are re-emitted by Settings::load() only when the value
+    // actually changed, so this never fires on unrelated saves (colours,
+    // shortcuts). Autotile windows are already retiled by the settingsChanged
+    // handler above; this covers manually-snapped windows. Debounced so a batch
+    // of per-side gap edits in one save collapses into a single resnap pass.
+    m_gapResnapTimer.setSingleShot(true);
+    m_gapResnapTimer.setInterval(100);
+    connect(&m_gapResnapTimer, &QTimer::timeout, this, [this]() {
+        if (!m_snapAdaptor) {
+            return;
+        }
+        m_suppressResnapOsd = 1; // settings-driven reflow, not user navigation
+        m_snapAdaptor->resnapCurrentAssignments();
+    });
+    const auto scheduleGapResnap = [this]() {
+        m_gapResnapTimer.start();
+    };
+    connect(m_settings.get(), &Settings::zonePaddingChanged, this, scheduleGapResnap);
+    connect(m_settings.get(), &Settings::outerGapChanged, this, scheduleGapResnap);
+    connect(m_settings.get(), &Settings::usePerSideOuterGapChanged, this, scheduleGapResnap);
+    connect(m_settings.get(), &Settings::outerGapTopChanged, this, scheduleGapResnap);
+    connect(m_settings.get(), &Settings::outerGapBottomChanged, this, scheduleGapResnap);
+    connect(m_settings.get(), &Settings::outerGapLeftChanged, this, scheduleGapResnap);
+    connect(m_settings.get(), &Settings::outerGapRightChanged, this, scheduleGapResnap);
+    connect(m_settings.get(), &Settings::perScreenSnappingSettingsChanged, this, scheduleGapResnap);
+
     // Initialize domain-specific D-Bus adaptors
     // Each adaptor has its own D-Bus interface
     // D-Bus adaptors use raw new; Qt parent-child manages their lifetime.
@@ -1225,9 +1269,13 @@ bool Daemon::init()
     // wiring before moving into the base-class unique_ptr members.
     auto engines = createEngines(m_layoutManager.get(), m_windowTrackingAdaptor->service(), m_screenManager.get(),
                                  m_algorithmRegistry.get(), m_zoneDetector.get(), m_settings.get(),
-                                 m_virtualDesktopManager.get(), m_windowRegistry.get(), this);
+                                 m_virtualDesktopManager.get(), m_windowRegistry.get());
     auto* autotileEngine = engines.autotile.get();
     auto* snapEngine = engines.snap.get();
+    // Move the shared cross-surface resolver BEFORE the engines so it is
+    // destroyed AFTER them (they borrow it). Declared earlier than the engines
+    // in daemon.h for the same reason.
+    m_crossSurfaceResolver = std::move(engines.crossSurfaceResolver);
     m_autotileEngine = std::move(engines.autotile);
     m_snapEngine = std::move(engines.snap);
     m_screenModeRouter = std::move(engines.router);
@@ -1277,6 +1325,12 @@ bool Daemon::init()
     // AutotileEngine/TilingState). WTS references it for zone queries.
     m_windowTrackingAdaptor->service()->setSnapState(snapEngine->snapState());
     m_windowTrackingAdaptor->service()->setSnapEngine(snapEngine);
+    // Inject the shared window registry so SnapState canonicalizes its
+    // windowId-keyed stores to the stable first-seen composite (instanceId →
+    // first observed appId|instanceId). This makes snap float/zone/screen state
+    // immune to the effect-restart-after-WM_CLASS-mutation re-identification
+    // skew, mirroring how AutotileEngine canonicalizes tiling state (issue #628).
+    snapEngine->snapState()->setWindowRegistry(m_windowRegistry.get());
 
     // Filter the unified rule store down to its Exclude-shaped slice and
     // hand the address to SnapEngine for its isAppIdExcluded probe. The
@@ -1299,9 +1353,9 @@ bool Daemon::init()
     //     populated by WTA::loadState above.
     snapEngine->setExcludeRuleSet(&m_excludeRuleSet);
     m_excludeRuleSet.setRules(
-        PhosphorWindowRule::ExclusionRules::excludeRulesFrom(m_windowRuleStore->ruleSet()).rules());
+        PhosphorWindowRules::ExclusionRules::excludeRulesFrom(m_windowRuleStore->ruleSet()).rules());
     m_windowTrackingAdaptor->pruneExcludedPendingRestores(
-        PhosphorWindowRule::ExclusionRules::applicationExcludePatternsFrom(m_excludeRuleSet));
+        PhosphorWindowRules::ExclusionRules::applicationExcludePatternsFrom(m_excludeRuleSet));
 
     auto refilterExcludeRules = [this, snapEnginePtr = QPointer(snapEngine)] {
         // QPointer null-checks defend the rulesChanged subscription
@@ -1330,8 +1384,8 @@ bool Daemon::init()
         // `QList<WindowRule>` slices element-wise (the same semantics as
         // `WindowRuleSet::operator==`, which delegates to this list compare) —
         // exactly the rules-list-only comparison we want.
-        const QList<PhosphorWindowRule::WindowRule> newSlice =
-            PhosphorWindowRule::ExclusionRules::excludeRulesFrom(m_windowRuleStore->ruleSet()).rules();
+        const QList<PhosphorWindowRules::WindowRule> newSlice =
+            PhosphorWindowRules::ExclusionRules::excludeRulesFrom(m_windowRuleStore->ruleSet()).rules();
         if (newSlice == m_excludeRuleSet.rules()) {
             return;
         }
@@ -1350,10 +1404,10 @@ bool Daemon::init()
         if (m_windowTrackingAdaptor) {
             // Shutdown-window guard, mirrors snapEnginePtr null-check above.
             m_windowTrackingAdaptor->pruneExcludedPendingRestores(
-                PhosphorWindowRule::ExclusionRules::applicationExcludePatternsFrom(m_excludeRuleSet));
+                PhosphorWindowRules::ExclusionRules::applicationExcludePatternsFrom(m_excludeRuleSet));
         }
     };
-    connect(m_windowRuleStore.get(), &PhosphorWindowRule::WindowRuleStore::rulesChanged, this,
+    connect(m_windowRuleStore.get(), &PhosphorWindowRules::WindowRuleStore::rulesChanged, this,
             [refilterExcludeRules](bool /*persisted*/) {
                 refilterExcludeRules();
             });
@@ -1364,10 +1418,14 @@ bool Daemon::init()
     // open zone selectors / the layout picker in sync would miss it. Re-push
     // the lock state to any open overlay on every rule change. QPointer guards
     // the shutdown window (overlay reset before ~Daemon disconnects).
-    connect(m_windowRuleStore.get(), &PhosphorWindowRule::WindowRuleStore::rulesChanged, this,
+    connect(m_windowRuleStore.get(), &PhosphorWindowRules::WindowRuleStore::rulesChanged, this,
             [overlay = QPointer(m_overlayService.get())](bool /*persisted*/) {
                 if (overlay) {
                     overlay->refreshContextLockState();
+                    // A rule change can also alter the resolved overlay shader /
+                    // style for the active context; re-apply it live if the
+                    // overlay is currently shown (no-op otherwise).
+                    overlay->refreshOverlayPropertiesIfShown();
                 }
             });
 
@@ -1405,10 +1463,10 @@ bool Daemon::init()
                                        const QString& windowId) -> PhosphorZones::AssignmentEntry::Mode {
             QString screenId;
             if (m_windowTrackingAdaptor && m_windowTrackingAdaptor->service()) {
-                screenId = m_windowTrackingAdaptor->service()->screenAssignments().value(windowId);
+                screenId = m_windowTrackingAdaptor->service()->screenForWindow(windowId);
             }
             if (!screenId.isEmpty() && m_layoutManager) {
-                return m_layoutManager->modeForScreen(screenId, currentDesktop(), currentActivity());
+                return m_layoutManager->modeForScreen(screenId, currentDesktopForScreen(screenId), currentActivity());
             }
             // No tracked screen in WTS (e.g. a window snap never saw): if the
             // autotile engine tracks it, its current mode is Autotile. Otherwise
@@ -1574,7 +1632,6 @@ bool Daemon::init()
             if (!m_snapEngine || !m_windowTrackingAdaptor || !m_screenManager || !m_layoutManager)
                 return;
 
-            const int desktop = currentDesktop();
             const QString activity = currentActivity();
 
             // Collect autotile screens and per-screen OSD data in one pass
@@ -1588,6 +1645,8 @@ bool Daemon::init()
             QVector<ScreenOsd> osdEntries;
             const QStringList effectiveIds = m_screenManager->effectiveScreenIds();
             for (const QString& screenId : effectiveIds) {
+                // Per-output virtual desktops (#648): each screen resolves its own desktop.
+                const int desktop = currentDesktopForScreen(screenId);
                 const QString assignmentId = m_layoutManager->assignmentIdForScreen(screenId, desktop, activity);
                 if (PhosphorLayout::LayoutId::isAutotile(assignmentId)) {
                     autotileScreens.insert(screenId);
@@ -1621,6 +1680,13 @@ bool Daemon::init()
             // pattern used for the mode-toggle locked feedback in connectShortcutSignals().
             const bool osdEnabled = m_settings && m_settings->showOsdOnLayoutSwitch();
             for (const auto& osd : std::as_const(osdEntries)) {
+                // Suppressed context → no active layout; skip its OSD, mirroring
+                // the per-screen desktop-switch OSD gate in showOsdForScreens.
+                if (m_layoutManager
+                    && m_layoutManager->isContextActiveLayoutSuppressed(
+                        osd.screenId, currentDesktopForScreen(osd.screenId), activity)) {
+                    continue;
+                }
                 const PhosphorZones::AssignmentEntry::Mode mode = osd.isAutotile
                     ? PhosphorZones::AssignmentEntry::Autotile
                     : PhosphorZones::AssignmentEntry::Snapping;
@@ -1633,12 +1699,15 @@ bool Daemon::init()
                         // Resolve the algorithm's human-readable display
                         // name via the registry instead of surfacing the
                         // wire-format id (e.g. "bsp" → "Binary Split").
-                        // Mirrors osd.cpp:548-551.
+                        // Mirrors the algorithm display-name resolution in the
+                        // per-screen OSD path (showOsdForScreens, osd.cpp).
                         const auto* algo = m_algorithmRegistry ? m_algorithmRegistry->algorithm(osd.algoId) : nullptr;
                         const QString displayName = algo ? algo->name() : osd.algoId;
                         showLayoutOsdForAlgorithm(osd.algoId, displayName, osd.screenId);
                     }
                 } else {
+                    // Per-output virtual desktops (#648): each screen resolves its own desktop.
+                    const int desktop = currentDesktopForScreen(osd.screenId);
                     PhosphorZones::Layout* layout = m_layoutManager->layoutForScreen(osd.screenId, desktop, activity);
                     if (layout)
                         showLayoutOsd(layout, osd.screenId);
@@ -1948,6 +2017,10 @@ void Daemon::stop()
 {
     m_shuttingDown = true;
 
+    // Cancel any pending debounced gap-resnap so it can't fire mid-teardown
+    // (the engine is cleared below; a late fire would be a wasted no-op).
+    m_gapResnapTimer.stop();
+
     // Drop the layout-manager provider lambdas FIRST, before the m_running
     // gate. They capture `this` and dereference m_settings; m_settings is
     // declared after m_layoutManager, so reverse-order member destruction
@@ -1966,6 +2039,7 @@ void Daemon::stop()
         m_layoutManager->setDefaultLayoutIdProvider({});
         m_layoutManager->setDefaultAutotileAlgorithmProvider({});
         m_layoutManager->setSnappingPreferredProvider({});
+        m_layoutManager->setDefaultAssignmentSuppressedProvider({});
     }
 
     // Null the QML static registry / manager pointers BEFORE the m_running
@@ -2185,6 +2259,13 @@ void Daemon::stop()
     // Destroy engines now (during stop(), before Qt child destruction order).
     m_snapEngine.reset();
     m_autotileEngine.reset();
+
+    // Both engines borrowed m_crossSurfaceResolver (injected at construction).
+    // They are destroyed immediately above, so the borrow is already dead;
+    // reset the resolver here too so the teardown order is explicit and
+    // grep-discoverable — matching the exclude-rule / window-rule borrow
+    // severing above — and survives a future member-declaration reorder.
+    m_crossSurfaceResolver.reset();
 
     // Unregister D-Bus object path and service to prevent late calls during shutdown
     QDBusConnection bus = QDBusConnection::sessionBus();

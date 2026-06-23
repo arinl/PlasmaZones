@@ -105,15 +105,10 @@ using PhosphorEngine::PerScreenSnappingKey::OuterGapTop;
 using PhosphorEngine::PerScreenSnappingKey::UsePerSideOuterGap;
 using PhosphorEngine::PerScreenSnappingKey::ZonePadding;
 
-inline constexpr QLatin1String SnapAssistEnabled{"SnapAssistEnabled"};
-inline constexpr QLatin1String ZoneSelectorEnabled{"ZoneSelectorEnabled"};
-inline constexpr QLatin1String ZoneSelectorTriggerDistance{"ZoneSelectorTriggerDistance"};
-inline constexpr QLatin1String ZoneSelectorPosition{"ZoneSelectorPosition"};
-inline constexpr QLatin1String ZoneSelectorLayoutMode{"ZoneSelectorLayoutMode"};
-inline constexpr QLatin1String ZoneSelectorSizeMode{"ZoneSelectorSizeMode"};
-inline constexpr QLatin1String ZoneSelectorMaxRows{"ZoneSelectorMaxRows"};
-inline constexpr QLatin1String ZoneSelectorPreviewWidth{"ZoneSelectorPreviewWidth"};
-inline constexpr QLatin1String ZoneSelectorPreviewHeight{"ZoneSelectorPreviewHeight"};
+// Only the gap keys above are per-screen. Snap-assist and the zone-selector
+// enable switch are global-only (ISettings::setSnapAssistEnabled /
+// setZoneSelectorEnabled); the per-screen zone-selector config lives in its own
+// map/group keyed by ZoneSelectorConfigKey (see kPerScreenKeys in perscreen.cpp).
 } // namespace PerScreenSnappingKey
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -288,7 +283,7 @@ public:
     // excludedWindowClasses) retired in v4 — the legacy QStringList settings
     // folded into Application-subject Exclude WindowRules, and all consumers
     // (snap-engine, KWin effect, WTA pending-restore prune) now route through
-    // PhosphorWindowRule::ExclusionRules over the unified rule store.
+    // PhosphorWindowRules::ExclusionRules over the unified rule store.
 
     virtual bool excludeTransientWindows() const = 0;
     virtual void setExcludeTransientWindows(bool exclude) = 0;
@@ -423,6 +418,15 @@ public:
 
     virtual QString defaultLayoutId() const = 0;
     virtual void setDefaultLayoutId(const QString& layoutId) = 0;
+
+    /// When true, no context is assigned an active snapping or autotiling layout
+    /// by default — the synthesized level-1 default is suppressed and a mode only
+    /// activates for a context the user has explicitly assigned (or a
+    /// DefaultLayoutAssignment window rule has re-enabled). Mode-neutral: governs
+    /// both engines, since the level-1 default is a single mode-carrying entry.
+    /// Off by default (every context gets the default, today's behavior).
+    virtual bool suppressDefaultLayoutAssignment() const = 0;
+    virtual void setSuppressDefaultLayoutAssignment(bool suppress) = 0;
 };
 
 /**

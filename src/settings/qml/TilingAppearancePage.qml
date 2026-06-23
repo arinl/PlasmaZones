@@ -51,6 +51,7 @@ SettingsFlickable {
         // =================================================================
         GapsSettingsCard {
             Layout.fillWidth: true
+            searchAnchor: "gaps"
             scopeEnabled: true
             scopeAppSettings: settingsController
             // Gaps sub-domain only — must not report/reset the Algorithm card's

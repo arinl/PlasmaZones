@@ -11,7 +11,7 @@
 #include <QStringList>
 #include <QUuid>
 
-#include <PhosphorWindowRule/WindowRule.h>
+#include <PhosphorWindowRules/WindowRule.h>
 
 #include <functional>
 
@@ -109,11 +109,11 @@ public:
     // ── Bulk population (from the controller's D-Bus fetch) ──
 
     /// Replace the entire backing list. Resets the model.
-    void setRules(const QList<PhosphorWindowRule::WindowRule>& rules);
+    void setRules(const QList<PhosphorWindowRules::WindowRule>& rules);
 
     /// The current backing list — used by the controller to build a D-Bus
     /// payload on commit.
-    const QList<PhosphorWindowRule::WindowRule>& rules() const
+    const QList<PhosphorWindowRules::WindowRule>& rules() const
     {
         return m_rules;
     }
@@ -121,13 +121,13 @@ public:
     // ── Per-rule lookup / mutation by UUID (never by index) ──
 
     /// The rule with @p id, or a default-constructed (null-id) rule if absent.
-    PhosphorWindowRule::WindowRule ruleById(const QUuid& id) const;
+    PhosphorWindowRules::WindowRule ruleById(const QUuid& id) const;
 
     /// True if a rule with @p id is present.
     bool contains(const QUuid& id) const;
 
     /// Append @p rule. Returns false if its id collides or it is invalid.
-    bool addRule(const PhosphorWindowRule::WindowRule& rule);
+    bool addRule(const PhosphorWindowRules::WindowRule& rule);
 
     /// Insert @p rule at @p insertIndex with a SINGLE beginInsertRows/
     /// endInsertRows pair. Replaces the prior duplicateRule() shape
@@ -136,7 +136,7 @@ public:
     /// per user "Duplicate" click. @p insertIndex is clamped to
     /// [0, rowCount()] so callers don't have to range-check. Returns
     /// false if the rule's id collides or it is invalid.
-    bool addRuleAt(const PhosphorWindowRule::WindowRule& rule, int insertIndex);
+    bool addRuleAt(const PhosphorWindowRules::WindowRule& rule, int insertIndex);
 
     /// Outcome of an `updateRule()` call — lets the caller tell a genuine
     /// no-op (identical rule) apart from an applied change so a no-op save
@@ -150,7 +150,7 @@ public:
     /// Replace the rule with the same id. Returns `NotFound` for an unknown id
     /// or an invalid rule, `Unchanged` for an identical rule (no signal), and
     /// `Applied` when the rule was replaced.
-    UpdateResult updateRule(const PhosphorWindowRule::WindowRule& rule);
+    UpdateResult updateRule(const PhosphorWindowRules::WindowRule& rule);
 
     /// Remove the rule with @p id. Returns false if no such rule.
     bool removeRule(const QUuid& id);
@@ -170,19 +170,19 @@ public:
     // ── Section helpers (also used by the model's own data()) ──
 
     /// The section a rule falls into — pure function of the rule's shape.
-    static Section sectionFor(const PhosphorWindowRule::WindowRule& rule);
+    static Section sectionFor(const PhosphorWindowRules::WindowRule& rule);
 
     /// Localized header label for @p section.
     static QString sectionLabel(Section section);
 
     /// Localized human label for a match Field. Shared with
     /// `WindowRuleController` so the 14-case table lives in exactly one place.
-    static QString fieldLabel(PhosphorWindowRule::Field field);
+    static QString fieldLabel(PhosphorWindowRules::Field field);
 
     /// Every non-empty `ScreenId` leaf value found anywhere in @p match.
     /// Shared with `WindowRuleController` so the recursive walk lives in one
     /// place — the model exposes it as `ScreenIdsRole`.
-    static QStringList screenIdsOf(const PhosphorWindowRule::MatchExpression& match);
+    static QStringList screenIdsOf(const PhosphorWindowRules::MatchExpression& match);
 
     /// Display label for an action type id that no built-in label covers —
     /// the unknown / legacy / future-schema fallback. Shared by the model's
@@ -210,6 +210,13 @@ public:
     /// call @ref refreshLabels.
     void setActivityLabelLookup(LabelLookup fn);
 
+    /// Inject the zone-uuid → zone-name resolver used when rendering `Zone` leaf
+    /// predicates, so a snap-zone rule renders "Right column" rather than a raw
+    /// `{uuid}`. Install-once setter; lookups are read live every time `data()` is
+    /// invoked. To refresh visible labels after a lookup-source change, call
+    /// @ref refreshLabels.
+    void setZoneLabelLookup(LabelLookup fn);
+
     /// Inject the layoutId / algorithm-token → display-name resolvers used by
     /// the action summary so `SetSnappingLayout` and `SetTilingAlgorithm`
     /// render "Binary Split" rather than the wire token / UUID. Split into a
@@ -224,6 +231,10 @@ public:
     /// Resolver for `OverrideAnimationShader` action params (effect ids like
     /// "dissolve") so the summary renders "Dissolve" rather than the raw id.
     void setShaderEffectLabelLookup(LabelLookup fn);
+    /// Resolver for `OverrideOverlayShader` action params (overlay shader ids)
+    /// so the summary renders the friendly name rather than the raw id. Sourced
+    /// from the overlay/snapping shader registry, NOT the animation one.
+    void setOverlayShaderLabelLookup(LabelLookup fn);
     /// Resolver for `OverrideAnimationCurve` action params (curve wire strings
     /// like "0.33,1.00,0.68,1.00" / "spring:12,1") so the summary renders the
     /// friendly preset name ("Standard (Cubic)", "Spring (12, 1)", "Custom")
@@ -242,7 +253,7 @@ public:
     /// labels. Public because `WindowRuleController::ruleJson` uses it to
     /// blank the Name field in the editor when the stored value is an
     /// auto-stamp rather than something the user typed.
-    QString displayName(const PhosphorWindowRule::WindowRule& rule) const;
+    QString displayName(const PhosphorWindowRules::WindowRule& rule) const;
 
 Q_SIGNALS:
     void countChanged();
@@ -258,16 +269,17 @@ private:
     /// One-line human summary of a match expression — instance method because
     /// it consults the per-instance screen/activity lookups for ScreenId /
     /// Activity leaves.
-    QString matchSummary(const PhosphorWindowRule::MatchExpression& match) const;
+    QString matchSummary(const PhosphorWindowRules::MatchExpression& match) const;
     /// One-line human summary of an action list — instance method because it
     /// consults the per-instance layout lookup for `SetSnappingLayout` /
     /// `SetTilingAlgorithm` actions.
-    QString actionSummary(const QList<PhosphorWindowRule::RuleAction>& actions) const;
+    QString actionSummary(const QList<PhosphorWindowRules::RuleAction>& actions) const;
     /// Total leaf-predicate count in a match tree.
-    static int conditionCount(const PhosphorWindowRule::MatchExpression& match);
-    QList<PhosphorWindowRule::WindowRule> m_rules;
+    static int conditionCount(const PhosphorWindowRules::MatchExpression& match);
+    QList<PhosphorWindowRules::WindowRule> m_rules;
     LabelLookup m_screenLookup;
     LabelLookup m_activityLookup;
+    LabelLookup m_zoneLookup;
     // Split so a SetSnappingLayout action whose layoutId happens to
     // tokenise (e.g. matches an algorithm token by coincidence) and a
     // SetTilingAlgorithm action with a UUID-shaped algorithm name
@@ -275,6 +287,7 @@ private:
     LabelLookup m_snappingLayoutLookup;
     LabelLookup m_tilingAlgorithmLookup;
     LabelLookup m_shaderEffectLookup;
+    LabelLookup m_overlayShaderLookup;
     LabelLookup m_curveLookup;
 };
 

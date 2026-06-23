@@ -47,7 +47,7 @@ bool WindowTrackingAdaptor::hasPreTileGeometry(const QString& windowId)
     if (windowId.isEmpty() || !m_service) {
         return false;
     }
-    const QString screenId = m_service->screenAssignments().value(windowId);
+    const QString screenId = m_service->screenForWindow(windowId);
     return m_service->validatedUnmanagedGeometry(windowId, screenId).has_value();
 }
 
@@ -112,7 +112,7 @@ bool WindowTrackingAdaptor::getValidatedPreTileGeometry(const QString& windowId,
     // m_service is non-null by constructor invariant (the ctor qFatals on
     // null), so no guard is needed; the half-guard this replaced checked
     // one deref and missed the next.
-    const QString screenId = m_service->screenAssignments().value(windowId);
+    const QString screenId = m_service->screenForWindow(windowId);
 
     auto geo = m_service->validatedUnmanagedGeometry(windowId, screenId);
     if (!geo) {
@@ -160,11 +160,11 @@ QString WindowTrackingAdaptor::getPendingRestoreGeometries()
     // virtual desktop is used — consistent with the snap-side
     // setShouldRestorePredicate gate. Activity is left unset: snap-mode storage
     // carries no per-window activity tag (see isPersistedContextDisabled).
-    const int desktop = currentDesktop();
-
     QJsonObject result;
     for (auto it = targets.constBegin(); it != targets.constEnd(); ++it) {
         const auto& target = it.value();
+        // Per-output virtual desktops (#648): gate each record on ITS screen's desktop.
+        const int desktop = currentDesktopForScreen(target.screenId);
         if (isPersistedContextDisabled(target.screenId, desktop)) {
             qCDebug(lcDbusWindow) << "getPendingRestoreGeometries: skipping" << it.key()
                                   << "— disabled context on screen" << target.screenId;
@@ -247,14 +247,14 @@ QString WindowTrackingAdaptor::detectScreenForZone(const QString& zoneId) const
         return QString();
     }
 
-    const int desktop = currentDesktop();
-
     // Search per-screen layouts to find which screen's layout contains this zone.
     // This correctly handles multi-monitor setups where each screen has a different layout.
     // Use effective screen IDs (virtual + physical) so virtual screen layouts are searched too.
     const QStringList effectiveIds =
         (m_service->screenManager() ? m_service->screenManager()->effectiveScreenIds() : QStringList());
     for (const QString& sid : effectiveIds) {
+        // Per-output virtual desktops (#648): each screen resolves its own desktop.
+        const int desktop = currentDesktopForScreen(sid);
         PhosphorZones::Layout* layout =
             m_layoutManager->layoutForScreen(sid, desktop, m_layoutManager->currentActivity());
         if (layout && layout->zoneById(*zoneUuid)) {

@@ -39,8 +39,8 @@
 // std::make_unique<WindowRuleStore> in the ctor needs the complete
 // type. The header forward-declares it to avoid pulling the
 // dependency graph into every consumer of SettingsController.
-#include <PhosphorWindowRule/WindowRuleStore.h>
-#include <PhosphorWindowRule/WindowRuleStoreWatcher.h>
+#include <PhosphorWindowRules/WindowRuleStore.h>
+#include <PhosphorWindowRules/WindowRuleStoreWatcher.h>
 
 #include "../core/shaderregistry.h"
 #include "snappingshaderspagecontroller.h"
@@ -119,11 +119,15 @@ SettingsController::~SettingsController()
     if (m_windowRulesPage) {
         m_windowRulesPage->setScreenLookup({});
         m_windowRulesPage->setActivityLookup({});
+        m_windowRulesPage->setZoneLookup({});
         m_windowRulesPage->setSnappingLayoutLookup({});
         m_windowRulesPage->setTilingAlgorithmLookup({});
         // The shader resolver captures `this` and reaches m_animationShaderRegistry;
         // clear it too so the cleared set stays symmetric with what's installed.
         m_windowRulesPage->setShaderEffectLookup({});
+        // The overlay-shader resolver reaches m_overlayShaderRegistry — clear it
+        // too for the same symmetry.
+        m_windowRulesPage->setOverlayShaderLookup({});
         // Drain any in-flight `dataChanged` emissions queued against
         // the cleared lookups before the model captures the now-
         // empty resolvers. refreshLabels walks every row once and
@@ -139,8 +143,8 @@ SettingsController::SettingsController(QObject* parent)
     // m_localRuleStore is constructed first (declared before m_settings) so the
     // single shared store exists before m_settings borrows it. Parent stays
     // null on m_settings — it is a value member, not a QObject child of `this`.
-    , m_localRuleStore(std::make_unique<PhosphorWindowRule::WindowRuleStore>(ConfigDefaults::windowRulesFilePath()))
-    , m_localRuleStoreWatcher(std::make_unique<PhosphorWindowRule::WindowRuleStoreWatcher>(*m_localRuleStore))
+    , m_localRuleStore(std::make_unique<PhosphorWindowRules::WindowRuleStore>(ConfigDefaults::windowRulesFilePath()))
+    , m_localRuleStoreWatcher(std::make_unique<PhosphorWindowRules::WindowRuleStoreWatcher>(*m_localRuleStore))
     // Comma-expression: install the library-level screen-id resolver, then store
     // `true`. Runs BEFORE m_settings (next) whose constructor load()s and
     // migrates per-screen override keys via idForName — so the very first load
@@ -386,12 +390,17 @@ SettingsController::SettingsController(QObject* parent)
     // Tiling→Algorithm page sub-controller. Owns 7 slider bounds + the
     // custom-parameter CRUD surface. Borrows the algorithm registry this
     // controller already owns; declared as a unique_ptr AFTER
-    // m_localAlgorithmRegistry so reverse-order member destruction tears
-    // the sub-controller down BEFORE the registry resets. Parenting to
-    // `this` would defer destruction to ~QObject, which runs AFTER the
-    // registry unique_ptr — leaving the controller's raw m_registry pointer
-    // briefly dangling.
-    m_tilingAlgorithmPage = std::make_unique<TilingAlgorithmController>(m_settings, *m_localAlgorithmRegistry, nullptr);
+    // m_localAlgorithmRegistry so reverse-order member destruction tears the
+    // sub-controller down BEFORE the registry resets.
+    //
+    // Parented to `this` so ApplicationController::registerPage does NOT adopt
+    // it: registerPage reparents parent-LESS pages to m_app, and m_app —
+    // declared last, destroyed first — would then delete this page, leaving the
+    // unique_ptr to double-free it (SIGSEGV on close). The parent is purely an
+    // ownership marker; the unique_ptr still resets in member order (before the
+    // borrowed registry, so raw m_registry never dangles), and ~QObject(this)
+    // finds nothing left to delete.
+    m_tilingAlgorithmPage = std::make_unique<TilingAlgorithmController>(m_settings, *m_localAlgorithmRegistry, this);
     connect(m_tilingAlgorithmPage.get(), &TilingAlgorithmController::changed, this,
             &SettingsController::onSettingsPropertyChanged);
 
@@ -575,6 +584,32 @@ SettingsController::SettingsController(QObject* parent)
         }
         return activityId;
     });
+    // Zone (snap-zone UUID) → friendly "<layout> — <zone>" label, walking the
+    // local manual layouts for the zone whose id matches. Resolved live so a
+    // later layout/zone rename surfaces on the next refreshLabels(). The zone-name
+    // data is not in the LayoutPreview list (it carries geometry + numbers, not
+    // UUIDs), so this reads the registry's actual Zone objects directly. Unknown
+    // ids (deleted layout, hand-edited rule) round-trip verbatim.
+    m_windowRulesPage->setZoneLookup([this](const QString& zoneId) -> QString {
+        if (zoneId.isEmpty() || !m_localLayoutManager) {
+            return zoneId;
+        }
+        for (PhosphorZones::Layout* layout : m_localLayoutManager->layouts()) {
+            if (!layout) {
+                continue;
+            }
+            for (PhosphorZones::Zone* zone : layout->zones()) {
+                if (!zone || zone->id().toString() != zoneId) {
+                    continue;
+                }
+                const QString zoneName =
+                    zone->name().isEmpty() ? PhosphorI18n::tr("Zone %1").arg(zone->zoneNumber()) : zone->name();
+                const QString layoutName = layout->name();
+                return layoutName.isEmpty() ? zoneName : PhosphorI18n::tr("%1 — %2").arg(layoutName, zoneName);
+            }
+        }
+        return zoneId;
+    });
     // SettingsController::layouts() is the union of snapping layouts
     // (UUID-keyed) and autotile entries (algorithm-token-keyed via the
     // "autotile:<token>" or bare-token shape PhosphorTiles ships) — one
@@ -623,6 +658,22 @@ SettingsController::SettingsController(QObject* parent)
         return name.isEmpty() ? effectId : name;
     };
     m_windowRulesPage->setShaderEffectLookup(resolveShaderEffectLookup);
+    // OverrideOverlayShader stores an overlay/snapping shader id; resolve it to
+    // the friendly name via the overlay shader registry (the same source the
+    // rule editor's overlay-shader picker reads), so the list shows
+    // "Overlay shader: <name>" rather than the raw id. Unknown ids round-trip
+    // verbatim (registry miss → empty name → raw id). m_overlayShaderRegistry is
+    // constructed later in this ctor; the `!m_overlayShaderRegistry` guard below
+    // covers that window — the lambda captures `this` and is invoked only lazily
+    // (on the model's first label render, after construction completes).
+    auto resolveOverlayShaderLookup = [this](const QString& effectId) -> QString {
+        if (effectId.isEmpty() || !m_overlayShaderRegistry) {
+            return effectId;
+        }
+        const QString name = m_overlayShaderRegistry->shader(effectId).name;
+        return name.isEmpty() ? effectId : name;
+    };
+    m_windowRulesPage->setOverlayShaderLookup(resolveOverlayShaderLookup);
     auto refreshRuleLabels = [this]() {
         if (m_windowRulesPage && m_windowRulesPage->model()) {
             m_windowRulesPage->model()->refreshLabels();
@@ -658,8 +709,12 @@ SettingsController::SettingsController(QObject* parent)
     m_shaderPreviewBackend = std::make_unique<RegistryShaderPreviewBackend>(m_overlayShaderRegistry, &m_settings);
     m_shaderPreviewController = std::make_unique<ShaderPreviewController>(m_shaderPreviewBackend.get());
 
+    // Parented to `this` for the same reason as m_tilingAlgorithmPage above:
+    // without a parent, registerPage would adopt it to m_app (destroyed first)
+    // and the unique_ptr would then double-free it on close. The unique_ptr
+    // still drives destruction in member order, before the borrowed registries.
     m_snappingShadersPage = std::make_unique<SnappingShadersPageController>(
-        m_overlayShaderRegistry, m_localLayoutManager.get(), m_shaderPreviewController.get());
+        m_overlayShaderRegistry, m_localLayoutManager.get(), m_shaderPreviewController.get(), this);
 
     // Screen helper signals — wire BEFORE the initial refreshScreens()
     // so a synchronous screensChanged emit from the refresh reaches our

@@ -17,6 +17,7 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
+#include <QVariantMap>
 #include <QJsonArray>
 #include <QQueue>
 #include <QRect>
@@ -52,7 +53,7 @@ class VirtualDesktopManager;
 class ActivityManager;
 }
 
-namespace PhosphorWindowRule {
+namespace PhosphorWindowRules {
 class WindowRuleStore;
 class RuleEvaluator;
 }
@@ -157,7 +158,7 @@ public:
      * rule set; it self-invalidates on in-place rule edits via the set's
      * revision counter, so no rulesChanged subscription is required.
      */
-    void setWindowRuleStore(PhosphorWindowRule::WindowRuleStore* store);
+    void setWindowRuleStore(PhosphorWindowRules::WindowRuleStore* store);
 
     /**
      * @brief Set engine references for routing operations per-screen
@@ -242,6 +243,14 @@ public Q_SLOTS:
      * @param activity       Activity UUID (empty = all activities / unknown)
      * @param windowType     PhosphorProtocol::WindowType underlying value; out-of-range
      *                       values are clamped to WindowType::Unknown
+     * @param extended       Extended window-property snapshot keyed by
+     *                       PhosphorProtocol::Service::WindowMetadataKey (state flags,
+     *                       geometry, accessory flags, captionNormal). A key is
+     *                       present only when the value is known; absent keys leave
+     *                       the corresponding WindowMetadata optional disengaged so a
+     *                       window-rule predicate over it stays inert. Lets the
+     *                       daemon's resolvers match the same KWin-property fields the
+     *                       effect path resolves live (window_query.cpp).
      *
      * Emits no D-Bus signal. Populates the daemon's WindowRegistry; consumers
      * subscribe to the registry's Qt signals directly.
@@ -251,7 +260,7 @@ public Q_SLOTS:
      */
     void setWindowMetadata(const QString& instanceId, const QString& appId, const QString& desktopFile,
                            const QString& title, const QString& windowRole, int pid, int virtualDesktop,
-                           const QString& activity, int windowType);
+                           const QString& activity, int windowType, const QVariantMap& extended);
 
     // windowSnapped, windowSnappedMultiZone, windowUnsnapped, windowsSnappedBatch,
     // recordSnapIntent moved to SnapAdaptor (org.plasmazones.Snap D-Bus interface).
@@ -343,9 +352,15 @@ public Q_SLOTS:
      * @param windowId Window ID that was closed
      * @param windowKind PhosphorEngine::WindowKind wire value (Unknown/Normal/
      *        Transient) — gates the snap-restore consume on reopen
+     * @param screenId The window's authoritative current screen at close (KWin's
+     *        getWindowScreenId). Threaded into the final placement capture so a
+     *        window dragged cross-screen and closed records its float-back on the
+     *        screen it actually closed on — by close time a cross-screen move has
+     *        torn down both engines' tracking, so neither capturePlacement can
+     *        report the real screen. Empty = legacy/opt-out.
      * @note Call this when KWin reports a window has been closed to prevent memory leaks
      */
-    void windowClosed(const QString& windowId, int windowKind);
+    void windowClosed(const QString& windowId, int windowKind, const QString& screenId = QString());
 
     /**
      * Notify daemon that a window was activated/focused
@@ -368,11 +383,39 @@ public Q_SLOTS:
     void setFrameGeometry(const QString& windowId, int x, int y, int width, int height);
 
     /**
+     * Notify the daemon that a tiled window finished an interactive resize.
+     *
+     * Called by the compositor plugin from windowFinishUserMovedResized when
+     * the interaction was a resize (not a move). Forwards to the autotile
+     * engine so it can reflow neighbouring windows to fill the gap (GitHub
+     * #652). The old/new frames are supplied directly by the plugin (latched at
+     * resize start / read at finish) because the debounced frame shadow updates
+     * mid-drag and can't serve as a reliable baseline. No-op for windows the
+     * autotile engine doesn't track.
+     *
+     * @param windowId Window identifier
+     * @param oldX,oldY,oldWidth,oldHeight Frame geometry before the resize
+     * @param newX,newY,newWidth,newHeight Frame geometry after the resize
+     */
+    void notifyWindowResized(const QString& windowId, int oldX, int oldY, int oldWidth, int oldHeight, int newX,
+                             int newY, int newWidth, int newHeight);
+
+    /**
      * Update cursor screen when cursor crosses to a different monitor
      * Called by the KWin effect's slotMouseChanged when screen changes.
      * @param screenId Name of the screen the cursor is now on
      */
     void cursorScreenChanged(const QString& screenId);
+
+    /**
+     * Record a screen's current virtual desktop (Plasma 6.7 per-output virtual
+     * desktops). Called by the KWin effect on KWin::EffectsHandler::desktopChanged.
+     * Forwarded to VirtualDesktopManager::updateScreenDesktop — KWin's own D-Bus
+     * VirtualDesktopManager interface only exposes the global current desktop.
+     * @param screenId Physical screen whose desktop changed
+     * @param desktop  The screen's current virtual desktop, 1-based
+     */
+    void screenDesktopChanged(const QString& screenId, int desktop);
 
     /**
      * Report navigation feedback from KWin effect (D-Bus method)
@@ -591,7 +634,16 @@ public:
     /// the WindowPlacementStore (or clear the record if no engine manages it).
     /// Shadow-written in P1; the single funnel every state-change + close hook
     /// calls so the persisted record always reflects the window's live state.
-    void captureWindowPlacement(const QString& windowId);
+    ///
+    /// @p authoritativeScreen, when non-empty (the close path passes KWin's
+    /// getWindowScreenId), is the window's true current screen. It is used ONLY
+    /// as a fallback when NEITHER engine produces a placement — the case where a
+    /// cross-screen move has removed the window from the source engine's tracking
+    /// and the destination engine has not adopted it, so both capturePlacement
+    /// calls return nullopt and the live screen would otherwise be lost. In that
+    /// case the float-back is recorded on @p authoritativeScreen via
+    /// WindowTrackingService::recordFloatingClose.
+    void captureWindowPlacement(const QString& windowId, const QString& authoritativeScreen = QString());
 
     /// Re-capture every open floating window's live geometry into the unified
     /// store at save time (no per-move hook fires for drags). Called before the
@@ -619,6 +671,24 @@ public:
     /// per-engine `*RestoreFloatedWindowsOnLogin` setting decides. Builds a
     /// WindowQuery from the window registry metadata.
     bool shouldRestoreFloatedPosition(const QString& windowId, PhosphorZones::AssignmentEntry::Mode mode);
+
+    /// Resolve whether an opening window should start FLOATING because a "Float
+    /// this app" window rule matched it. Consulted by the float predicate the
+    /// daemon injects into BOTH engines (in-process, not via D-Bus). Unlike
+    /// RestorePosition there is no global default — Float is purely rule-driven,
+    /// so the answer is false unless a Float rule matches. The Float action's
+    /// params are free-form, so the verdict is the presence of the filled slot.
+    bool shouldFloatByRule(const QString& windowId);
+
+    /// Resolve the 1-based zone ordinals an opening window should snap into
+    /// because a `SnapToZone` window rule matched it. Consulted by the placement
+    /// resolver the daemon injects into the SnapEngine (in-process, not via
+    /// D-Bus). Returns an empty list when no SnapToZone rule matches; multiple
+    /// ordinals request a zone span. Builds a WindowQuery from the window
+    /// registry metadata, pins it to @p screenId (the screen the window is
+    /// opening on) so a `ScreenId`-constrained rule resolves, and reads the
+    /// `Placement` slot — mirrors shouldFloatByRule.
+    QList<int> placementZonesByRule(const QString& windowId, const QString& screenId);
     /**
      * @brief Drop unified WindowPlacement records for excluded appIds.
      *
@@ -643,7 +713,7 @@ public:
      *   3. Daemon::finalizeStartup, after AutotileEngine::loadState has restored its
      *      placement records, so any autotile records loaded then are pruned too.
      * The daemon derives @p patterns from the unified WindowRule store via
-     * `PhosphorWindowRule::ExclusionRules::applicationExcludePatternsFrom`.
+     * `PhosphorWindowRules::ExclusionRules::applicationExcludePatternsFrom`.
      *
      * Safe to call at any time. An empty @p patterns short-circuits.
      */
@@ -771,6 +841,17 @@ Q_SIGNALS:
      */
     void activateWindowRequested(const QString& windowId);
 
+    /// Cross-desktop directional move: KWin should move @p windowId to virtual
+    /// desktop @p desktop (1-based). The effect calls windowToDesktops.
+    void windowDesktopMoveRequested(const QString& windowId, int desktop);
+
+    /// Daemon-initiated cross-output move: the daemon has migrated its own
+    /// tiling state for @p windowId onto @p targetScreenId and scheduled both
+    /// reflows. The window's resulting outputChanged is expected; the effect
+    /// must update bookkeeping + decoration only, not re-issue windowClosed/
+    /// windowOpened. User-drag cross-output moves carry no marker.
+    void windowOutputMoveExpected(const QString& windowId, const QString& targetScreenId);
+
     /**
      * @brief Daemon requests KWin to apply geometries for a batch of windows
      * @param geometries List of window geometry entries to apply
@@ -817,6 +898,39 @@ public:
     void requestMoveSpecificWindowToZone(const QString& windowId, const QString& zoneId, const QRect& geometry);
 
 private Q_SLOTS:
+    /**
+     * @brief Orchestrate a cross-MODE directional move handoff.
+     *
+     * Wired to both engines' crossModeMoveRequested. The source engine (the
+     * signal sender) reached a context boundary whose target is a different
+     * tiling mode and deferred here. This resolves the target mode at the
+     * destination context, relinquishes the window from the source engine
+     * (handoffRelease + source reflow for an autotile source), and hands it to
+     * the target engine (handoffReceive): autotile inserts it per the
+     * insertion-order setting; snap snaps it into the entry zone (monitor
+     * crossing) or the equivalent zone (snap→snap desktop crossing). For a
+     * cross-desktop crossing it then asks the compositor to move the real window
+     * to @p targetDesktop.
+     */
+    void handleCrossModeMove(const QString& windowId, const QString& targetScreenId, int targetDesktop,
+                             const QString& direction);
+
+    /**
+     * @brief Orchestrate a cross-MODE directional swap handoff (two-way).
+     *
+     * Wired to both engines' crossModeSwapRequested. Resolves the swap partner —
+     * the target surface's entry-edge window facing the source in @p direction
+     * (autotile: the edge tile; snap: the entry zone's occupant). With no partner
+     * the entry slot is empty, so it degrades to a plain cross-mode move. With a
+     * partner it captures both landing slots, relinquishes both windows from their
+     * engines, and re-places them swapped: the focused window takes the partner's
+     * slot on the target, the partner takes the focused window's vacated slot on
+     * the source. Emits windowOutputMoveExpected for each window that crosses
+     * outputs so the effect doesn't tear the placements down.
+     */
+    void handleCrossModeSwap(const QString& windowId, const QString& targetScreenId, int targetDesktop,
+                             const QString& direction);
+
     /**
      * @brief Handle layout change by validating zone assignments
      *
@@ -909,6 +1023,9 @@ private:
      *        disabled-context gates and last-used-zone tracking.
      */
     int currentDesktop() const;
+    /// This screen's current virtual desktop (Plasma 6.7 per-output virtual
+    /// desktops, #648), falling back to the global currentDesktop().
+    int currentDesktopForScreen(const QString& screenId) const;
 
     // clearFloatingStateForSnap was removed — PhosphorSnapEngine::SnapEngine::commitSnap
     // now handles floating-state clearing internally (and emits
@@ -999,12 +1116,14 @@ private:
     QPointer<PhosphorEngine::WindowRegistry> m_windowRegistry;
 
     // Unified window-rule store (daemon-owned, not owned here) + a lazily-built
-    // evaluator over its full rule set, used only by shouldRestoreFloatedPosition.
-    // The evaluator self-invalidates on in-place rule edits via the set revision,
-    // so it is built once on first use. Reset in setWindowRuleStore only when the
-    // store pointer actually changes (a same-store rebind keeps the evaluator).
-    PhosphorWindowRule::WindowRuleStore* m_windowRuleStore = nullptr;
-    std::unique_ptr<PhosphorWindowRule::RuleEvaluator> m_restorePositionEvaluator;
+    // evaluator over its full rule set, shared by shouldRestoreFloatedPosition
+    // and shouldFloatByRule (resolveCached returns every matched slot, so one
+    // evaluator serves both per-window resolvers). The evaluator self-invalidates
+    // on in-place rule edits via the set revision, so it is built once on first
+    // use. Reset in setWindowRuleStore only when the store pointer actually
+    // changes (a same-store rebind keeps the evaluator).
+    PhosphorWindowRules::WindowRuleStore* m_windowRuleStore = nullptr;
+    std::unique_ptr<PhosphorWindowRules::RuleEvaluator> m_windowRuleEvaluator;
 
     // ═══════════════════════════════════════════════════════════════════════════════
     // Persistence (adaptor responsibility: session.json save/load)

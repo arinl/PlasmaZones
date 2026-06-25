@@ -2038,7 +2038,14 @@ CompiledSurfacePack* PlasmaZonesEffect::compiledPack(const QString& packId,
         "    vTexCoord = texCoord;\n"
         "    gl_Position = modelViewProjectionMatrix * vec4(position, 0.0, 1.0);\n"
         "}\n");
-    QByteArray vertWithKwinDefine = kSurfaceDefaultVertexSource;
+    // Wrap the default vertex source through injectKwinDefineAfterVersion just
+    // like the custom-vertex branch below (and the animation default vertex):
+    // KWin rewrites our #version 450 down to the GL context core version (140),
+    // where the `layout(location = N)` qualifiers are illegal without the ARB
+    // extensions the inject helper enables. Passing the raw source here made
+    // frag-only packs (the border ships no vertex stage) fail to compile on
+    // NVIDIA (error C7548), latching the pack failed every frame.
+    QByteArray vertWithKwinDefine = injectKwinDefineAfterVersion(QString::fromUtf8(kSurfaceDefaultVertexSource));
     if (!eff.vertexShaderPath.isEmpty()) {
         QFile vertFile(eff.vertexShaderPath);
         if (vertFile.open(QIODevice::ReadOnly)) {
